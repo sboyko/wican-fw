@@ -1,6 +1,6 @@
 {
     "idf.adapterTargetName": "esp32c3",
-    "idf.portWin": "COM111",
+    "idf.portWin": "COM3",
     "idf.flashType": "UART",
     "files.associations": {
         "ftp.h": "c",
