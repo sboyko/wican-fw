@@ -258,6 +258,12 @@ static void can_rx_task(void *pvParameters)
         {
 //        	num_msg++;
 
+			if (rx_msg.identifier == 0x18DAFA00) {
+				const uint32_t canId = rx_msg.identifier&TWAI_EXTD_ID_MASK;
+
+				ESP_LOGI(TAG, "From ECU %08X %02X", (unsigned int)canId, (unsigned int)(rx_msg.data[0]));
+			}
+
         	process_led(1);
 
         	if(config_server_ws_connected())
@@ -289,7 +295,9 @@ static void can_rx_task(void *pvParameters)
 				else if(protocol == OBD_ELM327)
 				{
 					// Let elm327.c decide which messages to process
-					xQueueSend( xmsg_obd_rx_queue, ( void * ) &rx_msg, pdMS_TO_TICKS(0) );
+					if(rx_msg.identifier == 0x18DAFA00) {
+						xQueueSend( xmsg_obd_rx_queue, ( void * ) &rx_msg, pdMS_TO_TICKS(0) );
+					}
 				}
 
 
@@ -438,7 +446,7 @@ void app_main(void)
 //		can_init(CAN_500K);
 		can_set_bitrate(can_datarate);
 		can_enable();
-		xmsg_obd_rx_queue = xQueueCreate(32, sizeof( twai_message_t) );
+		xmsg_obd_rx_queue = xQueueCreate(128, sizeof( twai_message_t) );
 		if(config_server_mqtt_en_config() && config_server_mqtt_elm327_log())
 		{
 			mqtt_elm327_log_en = config_server_mqtt_elm327_log();
@@ -562,6 +570,6 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_NONE);
+	esp_log_level_set("*", ESP_LOG_INFO);
 }
 

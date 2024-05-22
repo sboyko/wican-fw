@@ -74,6 +74,7 @@ typedef struct __xelm327_config
 	uint8_t priority_bits;
 	uint8_t fc_data_length:3;
 	uint8_t fc_mode:2;
+	uint8_t fc_enabled:1; // 'AT CFC0/CFC1' command
 	uint8_t linefeed:1;
 	uint8_t echo:1;
 	uint8_t space_print:1;
@@ -82,6 +83,8 @@ typedef struct __xelm327_config
 	uint8_t fc_header_is_set:1;
 	uint8_t rx_address_is_set:1;
 	uint8_t display_dlc:1;
+	uint8_t allow_long_messages:1; // 'AT AL' command
+	uint8_t auto_formatting:1; // 'AT CAF0/CAF1' command
 
 }_xelm327_config_t;
 
@@ -109,6 +112,7 @@ static void elm327_set_default_config(bool reset_protocol)
 
 	// Flow Control Settings
 	elm327_config.fc_mode = 0;
+	elm327_config.fc_enabled = 1; // The default setting is CFC1 - Flow Controls on
 	elm327_config.fc_header_is_set = 0;
 	elm327_config.fc_header = 0;
 	elm327_config.fc_data_length = 0;
@@ -120,6 +124,18 @@ static void elm327_set_default_config(bool reset_protocol)
 	elm327_config.echo = 1;
 	elm327_config.space_print = 1;
 	elm327_config.display_dlc = 0;
+
+	// The standard OBDII protocols restrict the number of data bytes in a message to seven, 
+	// which the ELM327 normally does as well (for both send and receive).
+	// If AL is selected, the ELM327 will allow long sends (eight data bytes) and long receives (unlimited in number).
+	// The default is AL off (and NL selected).
+	elm327_config.allow_long_messages = 0;
+
+	// Determine whether the ELM327 assists you with the formatting of the CAN data that is sent and received. 
+	// With CAN Automatic Formatting enabled (CAF1), the formatting (PCI) bytes will be automatically generated for you when sending, 
+	// and will be removed when receiving.
+	// Auto Formatting on (CAF1) is the default setting.
+	elm327_config.auto_formatting = 1;
 }
 
 typedef char* (*elm327_command_callback)(const char* command_str);
@@ -170,6 +186,29 @@ static char* elm327_set_linefeed(const char* command_str)
 	else if(command_str[1] == '0')
 	{
 		elm327_config.linefeed = 0;
+	}
+	else
+	{
+		return 0;
+	}
+	return (char*)ok_str;
+}
+
+static char* elm327_allow_long_messages(const char* command_str)
+{
+	elm327_config.allow_long_messages = 1;
+	return (char*)ok_str;
+}
+
+static char* elm327_auto_formatting(const char* command_str)
+{
+	if(command_str[3] == '1')
+	{
+		elm327_config.auto_formatting = 1;
+	}
+	else if(command_str[3] == '0')
+	{
+		elm327_config.auto_formatting = 0;
 	}
 	else
 	{
@@ -387,6 +426,23 @@ static char* elm327_set_fc_mode(const char* command_str)
 	}
 
 	elm327_config.fc_mode = mode;
+	return (char*)ok_str;
+}
+
+static char* elm327_set_fc_enabled(const char* command_str)
+{
+	if(command_str[3] == '1')
+	{
+		elm327_config.fc_enabled = 1;
+	}
+	else if(command_str[3] == '0')
+	{
+		elm327_config.fc_enabled = 0;
+	}
+	else
+	{
+		return 0;
+	}
 	return (char*)ok_str;
 }
 
@@ -761,7 +817,11 @@ static int8_t elm327_request(char *cmd, char *rsp, QueueHandle_t *queue)
 	}
 
 	cmd_data_length = strlen(cmd)/2;
-	if(cmd_data_length > 7)
+	if(elm327_config.allow_long_messages && cmd_data_length == 8)
+	{
+		elm327_fill_data_from_hex_str(cmd, &txframe.data[0], cmd_data_length);
+	}
+	else if(cmd_data_length > 7)
 	{
 		// commands can't be longer than 7 bytes unless flow control is used
 		// FIXME: this should use the linefeed setting and match the number of
@@ -770,9 +830,11 @@ static int8_t elm327_request(char *cmd, char *rsp, QueueHandle_t *queue)
 		elm327_response((char*)rsp, 0, queue);
 		return 0;
 	}
-
-	txframe.data[0] = cmd_data_length;
-	elm327_fill_data_from_hex_str(cmd, &txframe.data[1], cmd_data_length);
+	else
+	{
+		txframe.data[0] = cmd_data_length;
+		elm327_fill_data_from_hex_str(cmd, &txframe.data[1], cmd_data_length);
+	}
 
 	// CAN frames always have a data length code of 8, this is different than the
 	// PCI byte (txframe.data[0])
@@ -808,14 +870,14 @@ static int8_t elm327_request(char *cmd, char *rsp, QueueHandle_t *queue)
 		if( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, xwait_time) == pdPASS )
 		{
 			xwait_time = xtimeout;
-			// if(rx_frame.extd == 0)
-			// {
-			// 	ESP_LOGI(TAG, "received %03X %02X", rx_frame.identifier&0xFFF,rx_frame.data[0]);
-			// }
-			// else
-			// {
-			// 	ESP_LOGI(TAG, "received %08X %02X", rx_frame.identifier&TWAI_EXTD_ID_MASK,rx_frame.data[0]);
-			// }
+			if(rx_frame.extd == 0)
+			{
+				ESP_LOGI(TAG, "received %03X %02X", (unsigned int)rx_frame.identifier&0xFFF,(unsigned int)rx_frame.data[0]);
+			}
+			else
+			{
+				ESP_LOGI(TAG, "received %08X %02X", (unsigned int)rx_frame.identifier&TWAI_EXTD_ID_MASK,(unsigned int)rx_frame.data[0]);
+			}
 
 			if(elm327_should_receive(&rx_frame))
 			{
@@ -834,7 +896,10 @@ static int8_t elm327_request(char *cmd, char *rsp, QueueHandle_t *queue)
 				{
 					// This is a first frame
 					// Send a flow control response so we can get the remaining frames
-					elm327_send_flow_control_frame(&rx_frame);
+					if(elm327_config.fc_enabled)
+					{
+						elm327_send_flow_control_frame(&rx_frame);
+					}
 					// Length of the full data is:
 					//   ((0x0F & data[0]) << 8 | data[1])
 					//
@@ -897,11 +962,19 @@ static int8_t elm327_request(char *cmd, char *rsp, QueueHandle_t *queue)
 
 				// If this is a first frame, consecutive frame, or flow control frame the PCI (rx_frame.data[0]) will
 				// not be a valid length without some processing, so just print all 7 bytes
-				if(rx_frame_data_length > 7) rx_frame_data_length = 7;
+				uint8_t data_offset = 1;
+				if(!elm327_config.auto_formatting) {
+					data_offset = 0;
+					rx_frame_data_length = 8;
+				}
+				else
+				{
+					if(rx_frame_data_length > 7) rx_frame_data_length = 7;
+				}
 
 				for (int i = 0; i < rx_frame_data_length; i++)
 				{
-					sprintf((char*)tmp, "%02X", rx_frame.data[1+i]);
+					sprintf((char*)tmp, "%02X", rx_frame.data[data_offset + i]);
 					strcat((char*)rsp, (char*)tmp);
 				}
 
@@ -923,7 +996,7 @@ static int8_t elm327_request(char *cmd, char *rsp, QueueHandle_t *queue)
 			else
 			{
 				xwait_time -= (((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
-				ESP_LOGI(TAG, "xwait_time: %lu" , xwait_time);
+				//ESP_LOGI(TAG, "xwait_time: %lu" , xwait_time);
 				if(xwait_time > (elm327_config.req_timeout*4.096))
 				{
 					xwait_time = 0;
@@ -957,6 +1030,7 @@ const xelm327_cmd_t elm327_commands[] = {
 											{"fcsd", elm327_set_fc_data},// set the flow control data
 											{"fcsh", elm327_set_fc_header},// set the flow control header
 											{"fcsm", elm327_set_fc_mode}, // determine if the fc_data and/or fc_header is uses
+											{"cfc", elm327_set_fc_enabled}, // CAN Flow Control off or on
 											{"dpn", elm327_describe_protocol_num},//describe protocol by number
 											{"cra", elm327_set_receive_address},
 											{"cp", elm327_set_priority_bits},// set five most significant bits of 29bit header
@@ -970,10 +1044,14 @@ const xelm327_cmd_t elm327_commands[] = {
 											{"st", elm327_set_timeout},//set timeout
 											{"d", elm327_restore_defaults_or_display_dlc},//set all to defaults or change display DLC
 											{"z", elm327_reset_all},// reset all/software reset
+											{"ws", elm327_reset_all},// Warm Start (This command causes the ELM327 to perform a complete reset. It is very similar to the AT Z command, but does not include the power on LED test.)
 											{"s", elm327_return_ok},// printing of spaces off or on
 											{"e", elm327_set_echo},// echo off or on
 											{"h", elm327_header_on_off},//headers off or on
 											{"l", elm327_set_linefeed},//linefeeds off or on
+											{"al", elm327_allow_long_messages},// Allow Long messages 
+											{"caf", elm327_auto_formatting},// CAN Auto Formatting off or on
+											{"csm", elm327_return_ok},// CAN Silent Monitoring off or on (TODO:)
 											{"@", elm327_device_description},//display device description
 											{"i", elm327_identify},//identify yourself
 											{"m", elm327_return_ok},//memory off or on
