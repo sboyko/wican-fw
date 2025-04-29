@@ -120,7 +120,7 @@ static void elm327_set_default_config(bool reset_protocol)
 
 	// Display settings
 	elm327_config.show_header = 0;
-	elm327_config.linefeed = 1;
+	elm327_config.linefeed = 0;
 	elm327_config.echo = 1;
 	elm327_config.space_print = 1;
 	elm327_config.display_dlc = 0;
@@ -144,6 +144,18 @@ typedef struct _xelm327_cmd
 	const char * const command;
 	const elm327_command_callback command_interpreter;
 }xelm327_cmd_t;
+
+
+static esp_err_t can_tx_task(twai_message_t *message, TickType_t ticks_to_wait)
+{
+	ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
+		(unsigned int)(message->identifier&TWAI_EXTD_ID_MASK), (message->extd ? 'x' : ' '),
+		(unsigned int)message->data[0], (unsigned int)message->data[1], (unsigned int)message->data[2],
+		(unsigned int)message->data[3], (unsigned int)message->data[4], (unsigned int)message->data[5],
+		(unsigned int)message->data[6], (unsigned int)message->data[7]);
+
+	return can_send(message, ticks_to_wait);
+}
 
 
 static unsigned int elm327_parse_hex_char(char chr)
@@ -292,6 +304,33 @@ static char* elm327_restore_defaults_or_display_dlc(const char* command_str)
 	return (char*)ok_str;
 }
 
+static void elm327_set_filter(uint32_t filter)
+{
+	can_disable();
+
+	if (filter == 0xFFFFFFFF) {
+		ESP_LOGI(TAG, "accept all");
+
+		static twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+		can_set_filter(allPassFilter.acceptance_code);
+		can_set_mask(allPassFilter.acceptance_mask);
+	} else {
+		ESP_LOGI(TAG, "single 0x%08X", (unsigned int)filter);
+
+		can_set_filter(filter << 3);
+		can_set_mask(~TWAI_EXTD_ID_MASK);
+	}
+
+	can_enable();
+
+	if (filter != 0xFFFFFFFF) {
+		twai_message_t rx_frame;
+		while( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 0) == pdPASS ) {
+			// cleanup before new send request
+		}
+	}
+}
+
 static char* elm327_reset_all(const char* command_str)
 {
 	// TODO: this should set the active protocol to be
@@ -304,6 +343,8 @@ static char* elm327_reset_all(const char* command_str)
 	// This approach is required because at least some clients do
 	// not set the protocol again after calling ATZ.
 	elm327_set_default_config(false);
+
+	//elm327_set_filter(0xFFFFFFFF); // accept all CAN messages
 
 	return (char*)device_description;
 }
@@ -384,11 +425,15 @@ static char* elm327_set_receive_address(const char* command_str)
 	if(arg_size == 0)
 	{
 		elm327_config.rx_address_is_set = 0;
+
+		elm327_set_filter(0xFFFFFFFF); // accept all CAN messages
 	}
 	else if(arg_size == 3 || arg_size == 8)
 	{
 		elm327_config.rx_address_is_set = 1;
 		elm327_config.rx_address = elm327_parse_hex_str(command_str+3, arg_size);
+
+		elm327_set_filter(elm327_config.rx_address); // accept only given message
 	}
 	else
 	{
@@ -497,7 +542,7 @@ static char* elm327_set_protocol(const char* command_str)
 		elm327_config.protocol = command_str[2];
 	}
 	
-	ESP_LOGI(TAG, "elm327_config.protocol: %c", elm327_config.protocol);
+	ESP_LOGI(TAG, "proto = %c", elm327_config.protocol);
 
 	// The header should not be reset when the protocol is changed
 	// unless protocol autoscanning is being used. And even in that case
@@ -530,14 +575,14 @@ static char* elm327_set_protocol(const char* command_str)
 
 static char* elm327_set_timeout(const char* command_str)
 {
-	elm327_config.req_timeout = (strtol((char *) &command_str[2], NULL, 16) & 0xFF);
+	elm327_config.req_timeout = (strtol((char *) &command_str[2], NULL, 16) & 0xFFFF); // allows to use 2-byte timeout
 
 	if(elm327_config.req_timeout == 0)
 	{
 		elm327_config.req_timeout = 0x32;
 	}
 
-	ESP_LOGI(TAG, "elm327_config.req_timeout: %lu", elm327_config.req_timeout);
+	ESP_LOGI(TAG, "req_timeout = %lu ms", (TickType_t)((elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS));
 
 	return (char*)ok_str;
 }
@@ -650,19 +695,25 @@ static uint8_t elm327_should_receive(twai_message_t *rx_frame)
 	uint32_t identifier = rx_frame->identifier;
 	if(elm327_config.rx_address_is_set)
 	{
-		return identifier == elm327_config.rx_address;
-	}
-	else
-	{
-		if(rx_frame->extd)
-		{
-			return identifier >= 0x18DAF100 && identifier <= 0x18DAF1FF;
-		}
-		else
-		{
-			return identifier >= 0x7E8 && identifier <= 0x7EF;
+		if (identifier == elm327_config.rx_address) {
+			return true;
+		} else {
+			ESP_LOGW(TAG, "skip by rx_address %08X%c", (unsigned int)(rx_frame->identifier&TWAI_EXTD_ID_MASK), (rx_frame->extd ? 'x' : ' '));
+			return false;
 		}
 	}
+	return true;
+	// else
+	// {
+	// 	if(rx_frame->extd)
+	// 	{
+	// 		return identifier >= 0x18DAF100 && identifier <= 0x18DAF1FF;
+	// 	}
+	// 	else
+	// 	{
+	// 		return identifier >= 0x7E8 && identifier <= 0x7EF;
+	// 	}
+	// }
 }
 
 static void elm327_send_flow_control_frame(twai_message_t *first_frame)
@@ -753,15 +804,18 @@ static void elm327_send_flow_control_frame(twai_message_t *first_frame)
 		elm327_can_log(&txframe, ELM327_CAN_TX);
 	}
 	
-	can_send(&txframe, 1);
+	can_tx_task(&txframe, 1);
+}
+
+static TickType_t elapsedTimeMs(int64_t txtime)
+{
+	return (TickType_t)(((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
 }
 
 static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t *queue)
 {
-	twai_message_t txframe;
-
 	//ESP_LOGI(TAG, "PID req, cmd_buffer: %s", cmd);
-	ESP_LOG_BUFFER_HEX(TAG, cmd, cmd_len);
+	//ESP_LOG_BUFFER_HEX(TAG, cmd, cmd_len);
 
 	if((elm327_config.protocol != '6') && (elm327_config.protocol != '8') && (elm327_config.protocol != '7') && (elm327_config.protocol != '9'))
 	{
@@ -779,8 +833,7 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 		return 0;
 	}
 
-	twai_message_t rx_frame;
-
+	twai_message_t txframe;
 	txframe.identifier = elm327_get_identifier();
 	txframe.extd = elm327_config.protocol == '7' || elm327_config.protocol == '9';
 
@@ -809,8 +862,8 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 		{
 			req_expected_rsp = 0xFF;
 		}
-		ESP_LOGW(TAG, "req_expected_rsp 1: %u", req_expected_rsp);
 	}
+	ESP_LOGI(TAG, "req_expected_rsp = %u", req_expected_rsp);
 
 	uint8_t cmd_data_length = cmd_len / 2;
 	if(elm327_config.allow_long_messages && cmd_data_length == 8)
@@ -850,17 +903,13 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 	{
 		elm327_can_log(&txframe, ELM327_CAN_TX);
 	}
-	can_send(&txframe, 1);
-	TickType_t xtimeout = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
-	TickType_t xwait_time;
-	int64_t txtime = esp_timer_get_time();
-	uint8_t timeout_flag = 0;
-	uint8_t rsp_found = 0;
-	uint8_t number_of_rsp = 0;
-	char tmp[10];
-	xwait_time = xtimeout;
-	memset(tmp, 0, sizeof(tmp));
-	ESP_LOGW(TAG, "req_expected_rsp: %u", req_expected_rsp);
+
+	twai_message_t rx_frame;
+	while( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 0) == pdPASS ) {
+		// cleanup before new send request
+		ESP_LOGW(TAG, "skip %08X%c", (unsigned int)(rx_frame.identifier&TWAI_EXTD_ID_MASK), (rx_frame.extd ? 'x' : ' '));
+	}
+	can_tx_task(&txframe, 1);
 
 	if (req_expected_rsp == 0) {
 		//strcat((char*)rsp, "\r>");
@@ -870,188 +919,178 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 		return 0;
 	}
 
+	TickType_t totalMs = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
+	const int64_t txtime = esp_timer_get_time();
+	uint8_t rsp_found = 0;
+	uint8_t number_of_rsp = 0;
+	char tmp[10] = {0};
+
 	uint8_t sendControlFrame = false;
 
-	while(timeout_flag == 0)
+	while (true)
 	{
-		if( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, xwait_time) == pdPASS )
-		{
-			xwait_time = xtimeout;
-			if(rx_frame.extd == 0)
+		const int64_t txtime_local = esp_timer_get_time();
+
+		if (xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 5) == pdPASS
+				&& elm327_should_receive(&rx_frame)
+				) {
+			totalMs += elapsedTimeMs(txtime_local);
+
+			if( elm327_can_log != NULL)
 			{
-				ESP_LOGI(TAG, "received %03X %02X", (unsigned int)rx_frame.identifier&0xFFF,(unsigned int)rx_frame.data[0]);
+				elm327_can_log(&rx_frame, ELM327_CAN_RX);
+			}
+			//reset timeout after response is received
+			rsp_found = 1;
+			number_of_rsp++;
+
+			// Identify what kind of frame this is.
+			int rx_frame_data_length = 0;
+			uint8_t frame_type = rx_frame.data[0] & 0xF0;
+			if (frame_type == 0x10)
+			{
+				// This is a first frame
+				// Send a flow control response so we can get the remaining frames
+				if(elm327_config.fc_enabled)
+				{
+					elm327_send_flow_control_frame(&rx_frame);
+				}
+				// Length of the full data is:
+				//   ((0x0F & data[0]) << 8 | data[1])
+				//
+				// For now, we say the data length is 7 so the second part
+				// of the data length (data[1]) is sent plus the 6 bytes of
+				// actual data.
+				//
+				// TODO: if elm327_config.show_header is disabled then we
+				// should send the length of the full data on its own line
+				// and then send `0: [6 bytes of data]` on the next line for
+				// the first frame
+				rx_frame_data_length = 7;
+
+				rx_frame.data[0] |= 0x40;
+				sendControlFrame = true;
+				const uint16_t expectedLength = ((0x0F & rx_frame.data[0]) << 8 | rx_frame.data[1]);
+				req_expected_rsp = (uint8_t)(expectedLength / 7) + 1;
+			}
+			else if (frame_type == 0x20)
+			{
+				// This is a consecutive frame
+				// Sequence index of the frame is 0x0F & data[0]
+				// From the examples in the ELM327 docs the final consecutive frame includes
+				// any padding bytes. In theory we could be smarter and figure out how many
+				// of the total bytes we've received and then not print the padding bytes.
+				// However this is complex since the frames might come in out of order and
+				// there might be more than 15 of them.
+				// TODO: if elm327_config.show_header is disabled then we should add a prefix to the
+				// printed line: `[sequence index]: [7 bytes of data]`.
+				rx_frame_data_length = 7;
+
+				rx_frame.data[0] |= 0x40;
+			}
+			else if (frame_type == 0x30)
+			{
+				// This is a flow control frame from an ECU
+				//
+				// TODO: if we start supporting sending more than 7 bytes of
+				// data. We'll have to send first frames ourselves, and
+				// we'll need to handle receiving flow control frames from
+				// ECUs. In the meantime if we get one just send all the
+				// bytes to the client
+				rx_frame_data_length = 7;
+
+				rx_frame.data[3] = 0x01; // ABIT: don't send nor wait for FC frames
+				rx_frame.data[4] = ~rx_frame.data[3];
 			}
 			else
 			{
-				ESP_LOGI(TAG, "received %08X %02X", (unsigned int)rx_frame.identifier&TWAI_EXTD_ID_MASK,(unsigned int)rx_frame.data[0]);
+				// This is a single frame
+				rx_frame_data_length = rx_frame.data[0];
 			}
 
-			if(elm327_should_receive(&rx_frame))
+			// Based on the "CAF0 AND CAF1" section of the ELM doc, if headers are shown
+			// the PCI byte(s) (usually just data[0]) should be printed.
+			if(elm327_config.show_header)
 			{
-				if( elm327_can_log != NULL)
+				if(rx_frame.extd == 0)
 				{
-					elm327_can_log(&rx_frame, ELM327_CAN_RX);
-				}
-				//reset timeout after response is received
-				rsp_found = 1;
-				number_of_rsp++;
-
-				// Identify what kind of frame this is.
-				int rx_frame_data_length = 0;
-				uint8_t frame_type = rx_frame.data[0] & 0xF0;
-				if (frame_type == 0x10)
-				{
-					// This is a first frame
-					// Send a flow control response so we can get the remaining frames
-					if(elm327_config.fc_enabled)
-					{
-						elm327_send_flow_control_frame(&rx_frame);
-					}
-					// Length of the full data is:
-					//   ((0x0F & data[0]) << 8 | data[1])
-					//
-					// For now, we say the data length is 7 so the second part
-					// of the data length (data[1]) is sent plus the 6 bytes of
-					// actual data.
-					//
-					// TODO: if elm327_config.show_header is disabled then we
-					// should send the length of the full data on its own line
-					// and then send `0: [6 bytes of data]` on the next line for
-					// the first frame
-					rx_frame_data_length = 7;
-
-					rx_frame.data[0] |= 0x40;
-					sendControlFrame = true;
-					const uint16_t expectedLength = ((0x0F & rx_frame.data[0]) << 8 | rx_frame.data[1]);
-					req_expected_rsp = (uint8_t)(expectedLength / 7) + 1;
-				}
-				else if (frame_type == 0x20)
-				{
-					// This is a consecutive frame
-					// Sequence index of the frame is 0x0F & data[0]
-					// From the examples in the ELM327 docs the final consecutive frame includes
-					// any padding bytes. In theory we could be smarter and figure out how many
-					// of the total bytes we've received and then not print the padding bytes.
-					// However this is complex since the frames might come in out of order and
-					// there might be more than 15 of them.
-					// TODO: if elm327_config.show_header is disabled then we should add a prefix to the
-					// printed line: `[sequence index]: [7 bytes of data]`.
-					rx_frame_data_length = 7;
-
-					rx_frame.data[0] |= 0x40;
-				}
-				else if (frame_type == 0x30)
-				{
-					// This is a flow control frame from an ECU
-					//
-					// TODO: if we start supporting sending more than 7 bytes of
-					// data. We'll have to send first frames ourselves, and
-					// we'll need to handle receiving flow control frames from
-					// ECUs. In the meantime if we get one just send all the
-					// bytes to the client
-					rx_frame_data_length = 7;
-
-					rx_frame.data[3] = 0x01; // ABIT: don't send nor wait for FC frames
-					rx_frame.data[4] = ~rx_frame.data[3];
+					sprintf((char*)rsp, "%03lX%02X", rx_frame.identifier&0xFFF,rx_frame.data[0]);
 				}
 				else
 				{
-					// This is a single frame
-					rx_frame_data_length = rx_frame.data[0];
+					sprintf((char*)rsp, "%08lX%02X", rx_frame.identifier&TWAI_EXTD_ID_MASK,rx_frame.data[0]);
 				}
 
-				// Based on the "CAF0 AND CAF1" section of the ELM doc, if headers are shown
-				// the PCI byte(s) (usually just data[0]) should be printed.
-				if(elm327_config.show_header)
-				{
-					if(rx_frame.extd == 0)
-					{
-						sprintf((char*)rsp, "%03lX%02X", rx_frame.identifier&0xFFF,rx_frame.data[0]);
-					}
-					else
-					{
-						sprintf((char*)rsp, "%08lX%02X", rx_frame.identifier&TWAI_EXTD_ID_MASK,rx_frame.data[0]);
-					}
-
-				}
+			}
 
 //				ESP_LOGI(TAG, "ELM327 send 1: %s", rsp);
 
-				// If this is a first frame, consecutive frame, or flow control frame the PCI (rx_frame.data[0]) will
-				// not be a valid length without some processing, so just print all 7 bytes
-				uint8_t data_offset = 1;
-				if(!elm327_config.auto_formatting) {
-					data_offset = 0;
-					rx_frame_data_length = 8;
-				}
-				else
-				{
-					if(rx_frame_data_length > 7) rx_frame_data_length = 7;
-				}
-
-				for (int i = 0; i < rx_frame_data_length; i++)
-				{
-					sprintf((char*)tmp, "%02X", rx_frame.data[data_offset + i]);
-					strcat((char*)rsp, (char*)tmp);
-				}
-
-				strcat((char*)rsp, "\r");
-				ESP_LOGW(TAG, "ELM327 send: %s", rsp);
-//				ESP_LOG_BUFFER_HEX(TAG, rsp, strlen(rsp));
-				elm327_response(rsp, 0, queue);
-				memset(rsp, 0, strlen(rsp));
-//				strcat((char*)rsp, "\r");
-				if(req_expected_rsp != 0xFF)
-				{
-					if(req_expected_rsp == number_of_rsp)
-					{
-						timeout_flag = 1;
-						break;
-					}
-				}
-
-				static const uint8_t BS_MAX = 0x06; // esp32-can fails to receive more then 6 simultaneous CAN messages
-				if (sendControlFrame && ((number_of_rsp - 1) % BS_MAX) == 0) {
-					txframe.data[0] = 0x30;
-					txframe.data[1] = BS_MAX;
-					txframe.data[2] = 0x00; // zero duration between two consecutive frames
-					txframe.data[3] = 0xAA;
-					txframe.data[4] = 0xAA;
-					txframe.data[5] = 0xAA;
-					txframe.data[6] = 0xAA;
-					txframe.data[7] = 0xAA;
-					can_send(&txframe, 1);
-				}
-
+			// If this is a first frame, consecutive frame, or flow control frame the PCI (rx_frame.data[0]) will
+			// not be a valid length without some processing, so just print all 7 bytes
+			uint8_t data_offset = 1;
+			if(!elm327_config.auto_formatting) {
+				data_offset = 0;
+				rx_frame_data_length = 8;
 			}
 			else
 			{
-				xwait_time -= (((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
-				//ESP_LOGI(TAG, "xwait_time: %lu" , xwait_time);
-				if(xwait_time > (elm327_config.req_timeout*4.096))
-				{
-					xwait_time = 0;
-					timeout_flag = 1;
-				}
+				if(rx_frame_data_length > 7) rx_frame_data_length = 7;
+			}
+
+			for (int i = 0; i < rx_frame_data_length; i++)
+			{
+				sprintf((char*)tmp, "%02X", rx_frame.data[data_offset + i]);
+				strcat((char*)rsp, (char*)tmp);
+			}
+
+			strcat((char*)rsp, "\r");
+//			ESP_LOGW(TAG, "ELM327 send: %s", rsp);
+//			ESP_LOG_BUFFER_HEX(TAG, rsp, strlen(rsp));
+
+			bool rsp_complete = (req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp);
+			if (rsp_complete) {
+				strcat((char*)rsp, ">");
+			}
+
+			elm327_response(rsp, 0, queue);
+			rsp[0] = 0;
+
+			if (rsp_complete) {
+				ESP_LOGI(TAG, "response time = %lu ms", elapsedTimeMs(txtime));
+				break;
+			}
+
+			static const uint8_t BS_MAX = RX_QUEUE_LENGTH + 1; // esp32-can fails to receive more then (.rx_queue_len + 1) simultaneous CAN messages
+			if (sendControlFrame && ((number_of_rsp - 1) % BS_MAX) == 0) {
+				txframe.data[0] = 0x30;
+				txframe.data[1] = BS_MAX;
+				txframe.data[2] = 0x00; // zero duration between two consecutive frames
+				txframe.data[3] = 0xAA;
+				txframe.data[4] = 0xAA;
+				txframe.data[5] = 0xAA;
+				txframe.data[6] = 0xAA;
+				txframe.data[7] = 0xAA;
+				can_tx_task(&txframe, 1);
 			}
 		}
 		else
 		{
-			timeout_flag = 1;
+			const TickType_t elapsedMs = elapsedTimeMs(txtime);
+			if (elapsedMs >= totalMs) {
+				ESP_LOGW(TAG, "response timeout = %lu ms", elapsedMs);
+
+				if (rsp_found == 0) {
+					strcat((char*)rsp, "NO DATA\r\r>");
+				} else {
+					strcat((char*)rsp, "\r>");
+				}
+			
+				elm327_response(rsp, 0, queue);
+
+				break;
+			}
 		}
 	}
-
-	ESP_LOGW(TAG, "Response time: %" PRIu32, (uint32_t)((esp_timer_get_time() - txtime)/1000));
-
-	if(rsp_found == 0)
-	{
-		strcat((char*)rsp, "NO DATA\r\r>");
-	}
-	else
-	{
-		strcat((char*)rsp, "\r>");
-	}
-	elm327_response(rsp, 0, queue);
 
 	return 0;
 }
@@ -1103,13 +1142,12 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 
 	for(int i = 0; i < len; i++)
 	{
-		if(buf[i] == '\r' || cmd_len + 2 > sizeof(cmd_buffer))
+		if((buf[i] == '\r' && cmd_len > 0) || cmd_len + 2 > sizeof(cmd_buffer))
 		{
 	//		ESP_LOGI(TAG, "end of command i: %d, cmd_len: %u", i, cmd_len);
 			cmd_buffer[cmd_len] = 0;
 			cmd_response[0] = 0;
 			cmd_found_flag = 0;
-			memset(cmd_response, 0, sizeof(cmd_response));
 
 			if(!strncmp(cmd_buffer, "at", 2))
 			{
@@ -1117,9 +1155,7 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 				{
 					if(!strncmp(&cmd_buffer[2], elm327_commands[j].command, strlen(elm327_commands[j].command)))
 					{
-						cmd_response[0] = 0;
 						char *ret_ptr = elm327_commands[j].command_interpreter(&cmd_buffer[2]);
-
 						if(ret_ptr != 0)
 						{
 							strcat(cmd_response, ret_ptr);
@@ -1136,18 +1172,11 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 					strcat(cmd_response, (char*)question_mark_str);
 				}
 
-				if(elm327_config.linefeed)
-				{
-					strcat(cmd_response, "\r\n");
+				strcat(cmd_response, "\r");
+				if (elm327_config.linefeed) {
+					strcat(cmd_response, "\n");
 				}
-				else
-				{
-					strcat(cmd_response, "\r");
-				}
-
-				elm327_response((char*)cmd_response, 0, q);
-				memset(cmd_response, 0, sizeof(cmd_response));
-				strcat(cmd_response, "\r>");
+				strcat(cmd_response, ">");
 
 				elm327_response((char*)cmd_response, 0, q);
 
@@ -1166,24 +1195,17 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 					// Carscanner gets out of sync: the Carscanner log shows the next
 					// command with a response from the previous command.
 					cmd_len = 0;
-					memset(cmd_response, 0, sizeof(cmd_response));
 					return 0;
 				}
 			}
 			else if(!strncmp(cmd_buffer, "vti", 3) || !strncmp(cmd_buffer, "sti", 3))
 			{
 				strcat(cmd_response, (char*)question_mark_str);
-				if(elm327_config.linefeed)
-				{
-					strcat(cmd_response, "\r\n");
+				strcat(cmd_response, "\r");
+				if (elm327_config.linefeed) {
+					strcat(cmd_response, "\n");
 				}
-				else
-				{
-					strcat(cmd_response, "\r");
-				}
-				elm327_response((char*)cmd_response, 0, q);
-				memset(cmd_response, 0, sizeof(cmd_response));
-				strcat(cmd_response, "\r>");
+				strcat(cmd_response, ">");
 
 				elm327_response((char*)cmd_response, 0, q);
 			}
@@ -1194,10 +1216,10 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 					static const uint8_t CMD_LENGTH = 17;
 					for (uint16_t j = 0; j < cmd_len; j += CMD_LENGTH) {
 						if (cmd_buffer[j] == '5' || cmd_buffer[j] == '6') {
-							cmd_buffer[j] -= 4;
+							cmd_buffer[j] -= 4; // normalize ABIT FC-less frames
 						}
 
-						memset(cmd_response, 0, sizeof(cmd_response));
+						cmd_response[0] = 0;
 						elm327_request(cmd_buffer + j, CMD_LENGTH, cmd_response, q);
 					}
 				}
@@ -1265,7 +1287,7 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 //	//		        	req_pid = pidnum;
 //					}
 //
-//					can_send(frame, 1);
+//					can_tx_task(frame, 1);
 //
 //					TickType_t xwait_time = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
 //					int64_t txtime = esp_timer_get_time();
@@ -1349,12 +1371,11 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 			}
 
 			cmd_len = 0;
-			memset(cmd_response, 0, sizeof(cmd_response));
 		}
 		else
 		{
 			//clear queue before sending command
-			if(buf[i] != ' ' && buf[i] != '\n')
+			if(!isspace(buf[i]))
 			{
 				cmd_buffer[cmd_len++] = (char)tolower(buf[i]);
 			}

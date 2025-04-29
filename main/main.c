@@ -135,7 +135,7 @@ static void process_led(bool state)
 }
 
 //TODO: make this pretty?
-void send_to_host(char* str, uint32_t len, QueueHandle_t *q)
+void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 {
 	static xdev_buffer xsend_buffer;
 
@@ -150,13 +150,14 @@ void send_to_host(char* str, uint32_t len, QueueHandle_t *q)
 	memcpy(xsend_buffer.ucElement, str, xsend_buffer.usLen);
 	xQueueSend( *q, ( void * ) &xsend_buffer, portMAX_DELAY );
 
-//	ESP_LOG_BUFFER_HEX(TAG, ucTCP_TX_Buffer.ucElement, xsend_buffer.usLen);
+	ESP_LOG_BUFFER_HEXDUMP(TAG, xsend_buffer.ucElement, xsend_buffer.usLen, ESP_LOG_INFO);
+//	ESP_LOGI(TAG, "%s", str);
+
 	memset(xsend_buffer.ucElement, 0, sizeof(xsend_buffer.ucElement));
 	xsend_buffer.usLen = 0;
-//	ESP_LOGI(TAG, "%s", str);
 }
 
-static void can_tx_task(void *pvParameters)
+static void host_rx_task(void *pvParameters)
 {
 	while(1)
 	{
@@ -258,11 +259,11 @@ static void can_rx_task(void *pvParameters)
         {
 //        	num_msg++;
 
-			// if (rx_msg.identifier == 0x18DAFA00) {
-				const uint32_t canId = rx_msg.identifier&TWAI_EXTD_ID_MASK;
-
-				ESP_LOGI(TAG, "From ECU %08X %02X", (unsigned int)canId, (unsigned int)(rx_msg.data[0]));
-			// }
+			ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
+				(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
+				(unsigned int)rx_msg.data[0], (unsigned int)rx_msg.data[1], (unsigned int)rx_msg.data[2],
+				(unsigned int)rx_msg.data[3], (unsigned int)rx_msg.data[4], (unsigned int)rx_msg.data[5],
+				(unsigned int)rx_msg.data[6], (unsigned int)rx_msg.data[7]);
 
         	process_led(1);
 
@@ -295,9 +296,7 @@ static void can_rx_task(void *pvParameters)
 				else if(protocol == OBD_ELM327)
 				{
 					// Let elm327.c decide which messages to process
-					//if(rx_msg.identifier == 0x18DAFA00) {
-						xQueueSend( xmsg_obd_rx_queue, ( void * ) &rx_msg, pdMS_TO_TICKS(0) );
-					//}
+					xQueueSend( xmsg_obd_rx_queue, ( void * ) &rx_msg, pdMS_TO_TICKS(0) );
 				}
 
 
@@ -394,7 +393,7 @@ void app_main(void)
             derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
 	
 	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, (char*)&uid[0]);
-	slcan_init(&send_to_host);
+	slcan_init(&host_tx_task);
 
 	int8_t can_datarate = config_server_get_can_rate();
 	(can_datarate != -1) ? can_init(can_datarate):can_init(CAN_500K);
@@ -418,6 +417,10 @@ void app_main(void)
 		can_set_silent(1);
 	}
 
+	static twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+	can_set_filter(allPassFilter.acceptance_code);
+	can_set_mask(allPassFilter.acceptance_mask);
+
 	protocol = config_server_protocol();
 //	protocol = OBD_ELM327;
 
@@ -438,7 +441,7 @@ void app_main(void)
 	}
 	else if(protocol == SAVVYCAN)
 	{
-		gvret_init(&send_to_host);
+		gvret_init(&host_tx_task);
 		can_enable();
 	}
 	else if(protocol == OBD_ELM327)
@@ -450,11 +453,11 @@ void app_main(void)
 		if(config_server_mqtt_en_config() && config_server_mqtt_elm327_log())
 		{
 			mqtt_elm327_log_en = config_server_mqtt_elm327_log();
-			elm327_init(&send_to_host, &xmsg_obd_rx_queue, log_can_to_mqtt);
+			elm327_init(&host_tx_task, &xmsg_obd_rx_queue, log_can_to_mqtt);
 		}
 		else
 		{
-			elm327_init(&send_to_host, &xmsg_obd_rx_queue, NULL);
+			elm327_init(&host_tx_task, &xmsg_obd_rx_queue, NULL);
 		}
 	}
 
@@ -533,7 +536,7 @@ void app_main(void)
     }
 
     xTaskCreate(can_rx_task, "can_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
-    xTaskCreate(can_tx_task, "can_tx_task", 1024*3, (void*)AF_INET, 5, NULL);
+    xTaskCreate(host_rx_task, "host_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
 
     if(project_hardware_rev != WICAN_V210)
     {
@@ -570,6 +573,6 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_INFO);
+	esp_log_level_set("*", ESP_LOG_NONE);
 }
 
