@@ -85,6 +85,7 @@ typedef struct __xelm327_config
 	uint8_t display_dlc:1;
 	uint8_t allow_long_messages:1; // 'AT AL' command
 	uint8_t auto_formatting:1; // 'AT CAF0/CAF1' command
+	uint8_t monitor_all:1; // 'AT MA' command
 
 }_xelm327_config_t;
 
@@ -136,6 +137,8 @@ static void elm327_set_default_config(bool reset_protocol)
 	// and will be removed when receiving.
 	// Auto Formatting on (CAF1) is the default setting.
 	elm327_config.auto_formatting = 1;
+
+	elm327_config.monitor_all = 0; // off till explicitly turned on
 }
 
 typedef char* (*elm327_command_callback)(const char* command_str);
@@ -274,6 +277,15 @@ static char* elm327_identify(const char* command_str)
 	return (char*)identify;
 }
 
+static char* elm327_monitor_all(const char* command_str)
+{
+	if (!elm327_config.monitor_all) {
+		elm327_config.monitor_all = 1;
+		ESP_LOGI(TAG, "Monitor All is on");
+	}
+	return "";
+}
+
 static char* elm327_restore_defaults_or_display_dlc(const char* command_str)
 {
 	size_t arg_size = strlen(command_str+1);
@@ -311,7 +323,7 @@ static void elm327_set_filter(uint32_t filter)
 	if (filter == 0xFFFFFFFF) {
 		ESP_LOGI(TAG, "accept all");
 
-		static twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+		static const twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 		can_set_filter(allPassFilter.acceptance_code);
 		can_set_mask(allPassFilter.acceptance_mask);
 	} else {
@@ -422,7 +434,7 @@ static char* elm327_set_receive_address(const char* command_str)
 {
 	size_t arg_size = strlen(command_str+3);
 
-	if(arg_size == 0)
+	if(arg_size == 0 || strncmp(command_str+3, "xxx", 3) == 0)
 	{
 		elm327_config.rx_address_is_set = 0;
 
@@ -812,24 +824,20 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 	return (TickType_t)(((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
 }
 
-static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t *queue)
+static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
 {
 	//ESP_LOGI(TAG, "PID req, cmd_buffer: %s", cmd);
 	//ESP_LOG_BUFFER_HEX(TAG, cmd, cmd_len);
 
 	if((elm327_config.protocol != '6') && (elm327_config.protocol != '8') && (elm327_config.protocol != '7') && (elm327_config.protocol != '9'))
 	{
-		if(elm327_config.protocol == '1' || elm327_config.protocol == '2')
-		{
+		if(elm327_config.protocol == '1' || elm327_config.protocol == '2') {
 			strcat(rsp, "NO DATA\r\r>");
-			elm327_response((char*)rsp, 0, queue);
-		}
-		else
-		{
+		} else {
 			strcat(rsp, "BUS INIT: ...ERROR\r\r>");
-			elm327_response((char*)rsp, 0, queue);
 		}
 
+		elm327_response(rsp, 0, queue);
 		return 0;
 	}
 
@@ -907,7 +915,7 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 	twai_message_t rx_frame;
 	while( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 0) == pdPASS ) {
 		// cleanup before new send request
-		ESP_LOGW(TAG, "skip %08X%c", (unsigned int)(rx_frame.identifier&TWAI_EXTD_ID_MASK), (rx_frame.extd ? 'x' : ' '));
+		ESP_LOGW(TAG, "skip before send %08X%c", (unsigned int)(rx_frame.identifier&TWAI_EXTD_ID_MASK), (rx_frame.extd ? 'x' : ' '));
 	}
 	can_tx_task(&txframe, 1);
 
@@ -1008,48 +1016,40 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 				rx_frame_data_length = rx_frame.data[0];
 			}
 
+			uint8_t data_offset = 0;
+
 			// Based on the "CAF0 AND CAF1" section of the ELM doc, if headers are shown
 			// the PCI byte(s) (usually just data[0]) should be printed.
 			if(elm327_config.show_header)
 			{
-				if(rx_frame.extd == 0)
-				{
-					sprintf((char*)rsp, "%03lX%02X", rx_frame.identifier&0xFFF,rx_frame.data[0]);
+				if(rx_frame.extd == 0) {
+					sprintf(rsp, "%03lX", rx_frame.identifier&TWAI_STD_ID_MASK);
+				} else {
+					sprintf(rsp, "%08lX", rx_frame.identifier&TWAI_EXTD_ID_MASK);
 				}
-				else
-				{
-					sprintf((char*)rsp, "%08lX%02X", rx_frame.identifier&TWAI_EXTD_ID_MASK,rx_frame.data[0]);
-				}
-
-			}
-
-//				ESP_LOGI(TAG, "ELM327 send 1: %s", rsp);
-
-			// If this is a first frame, consecutive frame, or flow control frame the PCI (rx_frame.data[0]) will
-			// not be a valid length without some processing, so just print all 7 bytes
-			uint8_t data_offset = 1;
-			if(!elm327_config.auto_formatting) {
-				data_offset = 0;
 				rx_frame_data_length = 8;
-			}
-			else
-			{
+			} else if(!elm327_config.auto_formatting) {
+				rx_frame_data_length = 8;
+			} else {
+				// If this is a first frame, consecutive frame, or flow control frame the PCI (rx_frame.data[0]) will
+				// not be a valid length without some processing, so just print all 7 bytes
+				data_offset = 1;
 				if(rx_frame_data_length > 7) rx_frame_data_length = 7;
 			}
 
 			for (int i = 0; i < rx_frame_data_length; i++)
 			{
-				sprintf((char*)tmp, "%02X", rx_frame.data[data_offset + i]);
-				strcat((char*)rsp, (char*)tmp);
+				sprintf(tmp, "%02X", rx_frame.data[data_offset + i]);
+				strcat(rsp, (char*)tmp);
 			}
 
-			strcat((char*)rsp, "\r");
+			strcat(rsp, "\r");
 //			ESP_LOGW(TAG, "ELM327 send: %s", rsp);
 //			ESP_LOG_BUFFER_HEX(TAG, rsp, strlen(rsp));
 
 			bool rsp_complete = (req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp);
 			if (rsp_complete) {
-				strcat((char*)rsp, ">");
+				strcat(rsp, ">");
 			}
 
 			elm327_response(rsp, 0, queue);
@@ -1076,6 +1076,7 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 		else
 		{
 			const TickType_t elapsedMs = elapsedTimeMs(txtime);
+			
 			if (elapsedMs >= totalMs) {
 				ESP_LOGW(TAG, "response timeout = %lu ms", elapsedMs);
 
@@ -1087,6 +1088,9 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 			
 				elm327_response(rsp, 0, queue);
 
+				break;
+			} else if (fnHasNewData()) {
+				ESP_LOGW(TAG, "response reset by incoming data = %lu ms", elapsedMs);
 				break;
 			}
 		}
@@ -1124,13 +1128,13 @@ const xelm327_cmd_t elm327_commands[] = {
 											{"csm", elm327_return_ok},// CAN Silent Monitoring off or on (TODO:)
 											{"@", elm327_device_description},//display device description
 											{"i", elm327_identify},//identify yourself
-											{"m", elm327_return_ok},//memory off or on
+											{"ma", elm327_monitor_all},//monitor all on
 
 											{NULL, NULL},
 									};
 
 
-int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, QueueHandle_t *q)
+void elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, QueueHandle_t *q, bool (*fnHasNewData)())
 {
 	// Because the cmd_buffer and cmd_len are static they keep their value
 	// across multiple calls. So if a buf is an incomplete command the next
@@ -1172,13 +1176,15 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 					strcat(cmd_response, (char*)question_mark_str);
 				}
 
-				strcat(cmd_response, "\r");
-				if (elm327_config.linefeed) {
-					strcat(cmd_response, "\n");
-				}
-				strcat(cmd_response, ">");
+				if (strlen(cmd_response) > 0) { // so that 'AT MA' command will not reply
+					strcat(cmd_response, "\r");
+					if (elm327_config.linefeed) {
+						strcat(cmd_response, "\n");
+					}
+					strcat(cmd_response, ">");
 
-				elm327_response((char*)cmd_response, 0, q);
+					elm327_response((char*)cmd_response, 0, q);
+				}
 
 				if(cmd_buffer[2] == 'z')
 				{
@@ -1195,7 +1201,7 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 					// Carscanner gets out of sync: the Carscanner log shows the next
 					// command with a response from the previous command.
 					cmd_len = 0;
-					return 0;
+					break;
 				}
 			}
 			else if(!strncmp(cmd_buffer, "vti", 3) || !strncmp(cmd_buffer, "sti", 3))
@@ -1220,7 +1226,7 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 						}
 
 						cmd_response[0] = 0;
-						elm327_request(cmd_buffer + j, CMD_LENGTH, cmd_response, q);
+						elm327_request(cmd_buffer + j, CMD_LENGTH, cmd_response, q, fnHasNewData);
 					}
 				}
 //				ESP_LOGI(TAG, "PID req, cmd_buffer: %s", cmd_buffer);
@@ -1375,13 +1381,46 @@ int8_t elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, Queu
 		else
 		{
 			//clear queue before sending command
-			if(!isspace(buf[i]))
-			{
+			if (isspace(buf[i])) {
+				if (elm327_config.monitor_all) {
+					// To stop monitoring, simply send any single character to the ELM327, then wait for it to respond with a prompt character ('>')
+					elm327_config.monitor_all = 0;
+			
+					elm327_response("\r>", 0, q);
+
+					ESP_LOGW(TAG, "Monitor All is off");
+				}
+			} else {
 				cmd_buffer[cmd_len++] = (char)tolower(buf[i]);
 			}
 		}
 	}
-	return 0;
+}
+
+int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame)
+{
+	if (elm327_config.monitor_all) {
+		char* rsp = (char*)buf;
+		char tmp[4] = {0};
+
+		if (frame->extd == 0) {
+			sprintf(rsp, "%03lX", frame->identifier&TWAI_STD_ID_MASK);
+		} else {
+			sprintf(rsp, "%08lX", frame->identifier&TWAI_EXTD_ID_MASK);
+		}
+
+		for (int i = 0; i < TWAI_FRAME_MAX_DLC; i++) {
+			sprintf(tmp, "%02X", frame->data[i]);
+			strcat(rsp, tmp);
+		}
+		strcat(rsp, "\r");
+
+		return strlen(rsp);
+	} else {
+		// Let elm327.c decide which messages to process
+		xQueueSend(*can_rx_queue, frame, pdMS_TO_TICKS(0));
+		return 0;
+	}
 }
 
 void elm327_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q), QueueHandle_t *rx_queue, void (*can_log)(twai_message_t* frame, uint8_t type))

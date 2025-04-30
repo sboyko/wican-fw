@@ -157,6 +157,11 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 	xsend_buffer.usLen = 0;
 }
 
+bool fnHasNewData()
+{
+	return uxQueueMessagesWaiting(xMsg_Rx_Queue) > 0;
+}
+
 static void host_rx_task(void *pvParameters)
 {
 	while(1)
@@ -216,11 +221,11 @@ static void host_rx_task(void *pvParameters)
 		{
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
 			{
-				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
+				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue, fnHasNewData);
 			}
 			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
 			{
-				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xmsg_ble_tx_queue);
+				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xmsg_ble_tx_queue, fnHasNewData);
 			}
 		}
 	}
@@ -295,8 +300,7 @@ static void can_rx_task(void *pvParameters)
 				}
 				else if(protocol == OBD_ELM327)
 				{
-					// Let elm327.c decide which messages to process
-					xQueueSend( xmsg_obd_rx_queue, ( void * ) &rx_msg, pdMS_TO_TICKS(0) );
+					ucTCP_TX_Buffer.usLen = elm327_process_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 				}
 
 
@@ -573,6 +577,6 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_NONE);
+	esp_log_level_set("*", ESP_LOG_INFO);
 }
 
