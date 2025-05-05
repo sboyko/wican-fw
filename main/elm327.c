@@ -283,7 +283,45 @@ static char* elm327_monitor_all(const char* command_str)
 		elm327_config.monitor_all = 1;
 		ESP_LOGI(TAG, "Monitor All is on");
 	}
-	return "";
+	return ""; // skip reply
+}
+
+static char* elm327_special_send(const char* command_str)
+{
+	twai_message_t txframe;
+	// CAN frames always have a data length code of 8, this is different than the PCI byte (txframe.data[0])
+	txframe.data_length_code = 8;
+	txframe.self = 0;
+	txframe.rtr = 0;
+
+	// Pad the data
+	txframe.data[0] = 0xAA;
+	txframe.data[1] = 0xAA;
+	txframe.data[2] = 0xAA;
+	txframe.data[3] = 0xAA;
+	txframe.data[4] = 0xAA;
+	txframe.data[5] = 0xAA;
+	txframe.data[6] = 0xAA;
+	txframe.data[7] = 0xAA;
+
+	int offset = 3; // length of 'spc'
+	const size_t arg_size = strlen(command_str + offset);
+
+	if (arg_size == 21) { // normal Can Id
+		txframe.extd = 0;
+		txframe.identifier = elm327_parse_hex_str(command_str + offset, 3);
+		offset += 3;
+	} else { // extended Can Id
+		txframe.extd = 1;
+		txframe.identifier = elm327_parse_hex_str(command_str + offset, 8);
+		offset += 8;
+	}
+
+	elm327_fill_data_from_hex_str(command_str + offset, &txframe.data[0], 8);
+
+	can_tx_task(&txframe, 1);
+
+	return ""; // skip reply
 }
 
 static char* elm327_restore_defaults_or_display_dlc(const char* command_str)
@@ -432,7 +470,7 @@ static char* elm327_set_priority_bits(const char* command_str)
  */
 static char* elm327_set_receive_address(const char* command_str)
 {
-	size_t arg_size = strlen(command_str+3);
+	const size_t arg_size = strlen(command_str+3);
 
 	if(arg_size == 0 || strncmp(command_str+3, "xxx", 3) == 0)
 	{
@@ -1007,7 +1045,7 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 				// bytes to the client
 				rx_frame_data_length = 7;
 
-				rx_frame.data[3] = 0x01; // ABIT: don't send nor wait for FC frames
+				rx_frame.data[3] = 0x01; // don't send nor wait for FC frames (Abit specific)
 				rx_frame.data[4] = ~rx_frame.data[3];
 			}
 			else
@@ -1101,6 +1139,8 @@ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t
 
 
 const xelm327_cmd_t elm327_commands[] = {
+											{"spc", elm327_special_send},//special send (Abit specific - should be the first in the list)
+
 											{"fcsd", elm327_set_fc_data},// set the flow control data
 											{"fcsh", elm327_set_fc_header},// set the flow control header
 											{"fcsm", elm327_set_fc_mode}, // determine if the fc_data and/or fc_header is uses
@@ -1222,7 +1262,7 @@ void elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, QueueH
 					static const uint8_t CMD_LENGTH = 17;
 					for (uint16_t j = 0; j < cmd_len; j += CMD_LENGTH) {
 						if (cmd_buffer[j] == '5' || cmd_buffer[j] == '6') {
-							cmd_buffer[j] -= 4; // normalize ABIT FC-less frames
+							cmd_buffer[j] -= 4; // normalize Abit FC-less frames
 						}
 
 						cmd_response[0] = 0;
