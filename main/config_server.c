@@ -1064,7 +1064,7 @@ static void config_server_load_cfg(char *cfg)
 		goto config_error;
 	}
 	strcpy(device_config.ap_pass, key->valuestring);
-	ESP_LOGE(TAG, "device_config.ap_pass: %s", device_config.ap_pass);
+	ESP_LOGI(TAG, "device_config.ap_pass: %s", device_config.ap_pass);
 
 	key = cJSON_GetObjectItem(root,"protocol");
 	if(key == 0)
@@ -1076,7 +1076,7 @@ static void config_server_load_cfg(char *cfg)
 		goto config_error;
 	}
 	strcpy(device_config.protocol, key->valuestring);
-	ESP_LOGE(TAG, "device_config.protocol: %s", device_config.protocol);
+	ESP_LOGI(TAG, "device_config.protocol: %s", device_config.protocol);
 
 	key = cJSON_GetObjectItem(root,"ble_pass");
 	if(key == 0)
@@ -1088,7 +1088,7 @@ static void config_server_load_cfg(char *cfg)
 		goto config_error;
 	}
 	strcpy(device_config.ble_pass, key->valuestring);
-	ESP_LOGE(TAG, "device_config.ble_pass: %s", device_config.ble_pass);
+	ESP_LOGI(TAG, "device_config.ble_pass: %s", device_config.ble_pass);
 
 	key = cJSON_GetObjectItem(root,"sleep_status");
 	if(key == 0)
@@ -1097,7 +1097,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.sleep_status, key->valuestring);
-	ESP_LOGE(TAG, "device_config.sleep_status: %s", device_config.sleep_status);
+	ESP_LOGI(TAG, "device_config.sleep_status: %s", device_config.sleep_status);
 
 	key = cJSON_GetObjectItem(root,"ble_status");
 	if(key == 0)
@@ -1106,7 +1106,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.ble_status, key->valuestring);
-	ESP_LOGE(TAG, "device_config.ble_status: %s", device_config.ble_status);
+	ESP_LOGI(TAG, "device_config.ble_status: %s", device_config.ble_status);
 
 	key = cJSON_GetObjectItem(root,"sleep_volt");
 	if(key == 0)
@@ -1115,7 +1115,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.sleep_volt, key->valuestring);
-	ESP_LOGE(TAG, "device_config.sleep_volt: %s", device_config.sleep_volt);
+	ESP_LOGI(TAG, "device_config.sleep_volt: %s", device_config.sleep_volt);
 
 	//*****
 	key = cJSON_GetObjectItem(root,"batt_alert");
@@ -1125,7 +1125,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert: %s", device_config.batt_alert);
+	ESP_LOGI(TAG, "device_config.batt_alert: %s", device_config.batt_alert);
 	//*****
 
 	//*****
@@ -1136,7 +1136,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_ssid, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_ssid: %s", device_config.batt_alert_ssid);
+	ESP_LOGI(TAG, "device_config.batt_alert_ssid: %s", device_config.batt_alert_ssid);
 	//*****
 
 	//*****
@@ -1147,7 +1147,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_pass, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_pass: %s", device_config.batt_alert_pass);
+	ESP_LOGI(TAG, "device_config.batt_alert_pass: %s", device_config.batt_alert_pass);
 	//*****
 
 	//*****
@@ -1158,7 +1158,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_volt, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_volt: %s", device_config.batt_alert_volt);
+	ESP_LOGI(TAG, "device_config.batt_alert_volt: %s", device_config.batt_alert_volt);
 	//*****
 
 	//*****
@@ -1169,7 +1169,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_protocol, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_protocol: %s", device_config.batt_alert_protocol);
+	ESP_LOGI(TAG, "device_config.batt_alert_protocol: %s", device_config.batt_alert_protocol);
 	//*****
 
 	//*****
@@ -1180,7 +1180,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_url, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_url: %s", device_config.batt_alert_url);
+	ESP_LOGI(TAG, "device_config.batt_alert_url: %s", device_config.batt_alert_url);
 	//*****
 
 	//*****
@@ -1191,7 +1191,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_port, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_port: %s", device_config.batt_alert_port);
+	ESP_LOGI(TAG, "device_config.batt_alert_port: %s", device_config.batt_alert_port);
 	//*****
 
 	//*****
@@ -1202,7 +1202,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_topic, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_topic: %s", device_config.batt_alert_topic);
+	ESP_LOGI(TAG, "device_config.batt_alert_topic: %s", device_config.batt_alert_topic);
 	//*****
 
 	//*****
@@ -1213,7 +1213,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_mqtt_user, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_mqtt_user: %s", device_config.batt_mqtt_user);
+	ESP_LOGI(TAG, "device_config.batt_mqtt_user: %s", device_config.batt_mqtt_user);
 	//*****
 
 	//*****
@@ -1224,7 +1224,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_mqtt_pass, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_mqtt_pass: %s", device_config.batt_mqtt_pass);
+	ESP_LOGI(TAG, "device_config.batt_mqtt_pass: %s", device_config.batt_mqtt_pass);
 	//*****
 
 	//*****
@@ -1235,7 +1235,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.batt_alert_time, key->valuestring);
-	ESP_LOGE(TAG, "device_config.batt_alert_time: %s", device_config.batt_alert_time);
+	ESP_LOGI(TAG, "device_config.batt_alert_time: %s", device_config.batt_alert_time);
 	//*****
 
 
@@ -1248,7 +1248,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.mqtt_en, key->valuestring);
-	ESP_LOGE(TAG, "device_config.mqtt_en: %s", device_config.mqtt_en);
+	ESP_LOGI(TAG, "device_config.mqtt_en: %s", device_config.mqtt_en);
 	//*****
 
 	//*****
@@ -1259,7 +1259,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.mqtt_url, key->valuestring);
-	ESP_LOGE(TAG, "device_config.mqtt_url: %s", device_config.mqtt_url);
+	ESP_LOGI(TAG, "device_config.mqtt_url: %s", device_config.mqtt_url);
 	//*****
 
 	//*****
@@ -1270,7 +1270,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.mqtt_port, key->valuestring);
-	ESP_LOGE(TAG, "device_config.mqtt_port: %s", device_config.mqtt_port);
+	ESP_LOGI(TAG, "device_config.mqtt_port: %s", device_config.mqtt_port);
 	//*****
 
 	//*****
@@ -1281,7 +1281,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.mqtt_user, key->valuestring);
-	ESP_LOGE(TAG, "device_config.mqtt_user: %s", device_config.mqtt_user);
+	ESP_LOGI(TAG, "device_config.mqtt_user: %s", device_config.mqtt_user);
 	//*****
 
 	//*****
@@ -1292,7 +1292,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.mqtt_pass, key->valuestring);
-	ESP_LOGE(TAG, "device_config.mqtt_pass: %s", device_config.mqtt_pass);
+	ESP_LOGI(TAG, "device_config.mqtt_pass: %s", device_config.mqtt_pass);
 	//*****
 
 	//*****
@@ -1303,7 +1303,7 @@ static void config_server_load_cfg(char *cfg)
 	}
 
 	strcpy(device_config.mqtt_elm327_log, key->valuestring);
-	ESP_LOGE(TAG, "device_config.mqtt_elm327_log: %s", device_config.mqtt_elm327_log);
+	ESP_LOGI(TAG, "device_config.mqtt_elm327_log: %s", device_config.mqtt_elm327_log);
 	//*****
 
 	//*****
@@ -1321,7 +1321,7 @@ static void config_server_load_cfg(char *cfg)
 		strcpy(device_config.mqtt_tx_topic, key->valuestring);
 	}
 	
-	ESP_LOGE(TAG, "device_config.mqtt_tx_topic: %s", device_config.mqtt_tx_topic);
+	ESP_LOGI(TAG, "device_config.mqtt_tx_topic: %s", device_config.mqtt_tx_topic);
 	//*****
 
 	//*****
@@ -1333,7 +1333,7 @@ static void config_server_load_cfg(char *cfg)
 	strcpy(device_config.mqtt_rx_topic, key->valuestring);
 
 	
-	ESP_LOGE(TAG, "device_config.mqtt_rx_topic: %s", device_config.mqtt_rx_topic);
+	ESP_LOGI(TAG, "device_config.mqtt_rx_topic: %s", device_config.mqtt_rx_topic);
 	//*****
 
 	//*****
@@ -1345,7 +1345,7 @@ static void config_server_load_cfg(char *cfg)
 	strcpy(device_config.mqtt_status_topic, key->valuestring);
 
 	
-	ESP_LOGE(TAG, "device_config.mqtt_status_topic: %s", device_config.mqtt_status_topic);
+	ESP_LOGI(TAG, "device_config.mqtt_status_topic: %s", device_config.mqtt_status_topic);
 	//*****
 	return;
 

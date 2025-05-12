@@ -1174,7 +1174,7 @@ const xelm327_cmd_t elm327_commands[] = {
 									};
 
 
-void elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, QueueHandle_t *q, bool (*fnHasNewData)())
+void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHasNewData)())
 {
 	// Because the cmd_buffer and cmd_len are static they keep their value
 	// across multiple calls. So if a buf is an incomplete command the next

@@ -72,7 +72,7 @@ wait_skt_rx:
 					  portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
 	while(1)
 	{
-		rx_buffer.usLen = recv(sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement) - 1, 0);
+		rx_buffer.usLen = recv(sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement), 0);
         if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) == pdTRUE )
         {
         	//check if sock still connected?
@@ -95,10 +95,10 @@ wait_skt_rx:
 			else
 			{
 				rx_buffer.dev_channel = DEV_WIFI;
-				rx_buffer.ucElement[rx_buffer.usLen] = 0; // Null-terminate whatever is received and treat it like a string
+				//rx_buffer.ucElement[rx_buffer.usLen] = 0; // Null-terminate whatever is received and treat it like a string
 //				ESP_LOGI(TAG, "Received %d bytes: %s", rx_buffer.usLen, rx_buffer.ucElement);
 		        //TODO: what happens if blocked for ever?
-				xQueueSend( *xRX_Queue, ( void * ) &rx_buffer, portMAX_DELAY );
+				xQueueSend( *xRX_Queue, &rx_buffer, portMAX_DELAY );
 			}
 			xSemaphoreGive( xTCP_Socket_Semaphore );
         }
@@ -124,8 +124,7 @@ wait_skt_rx:
 //    int len = recvfrom(listen_sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
 	while(1)
 	{
-//		 = recv(sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement) - 1, 0);
-		rx_buffer.usLen = recvfrom(listen_sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
+		rx_buffer.usLen = recvfrom(listen_sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement), 0, (struct sockaddr *)&source_addr, &socklen);
         if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) == pdTRUE )
         {
         	//check if sock still connected?
@@ -141,10 +140,10 @@ wait_skt_rx:
 			else
 			{
 				rx_buffer.dev_channel = DEV_WIFI;
-				rx_buffer.ucElement[rx_buffer.usLen] = 0; // Null-terminate whatever is received and treat it like a string
+				//rx_buffer.ucElement[rx_buffer.usLen] = 0; // Null-terminate whatever is received and treat it like a string
 //				ESP_LOGI(TAG, "Received %d bytes: %s", rx_buffer.usLen, rx_buffer.ucElement);
 		        //TODO: what happens if blocked for ever?
-				xQueueSend( *xRX_Queue, ( void * ) &rx_buffer, portMAX_DELAY );
+				xQueueSend( *xRX_Queue, &rx_buffer, portMAX_DELAY );
 			}
 			xSemaphoreGive( xTCP_Socket_Semaphore );
         }

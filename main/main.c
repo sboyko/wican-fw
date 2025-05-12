@@ -139,22 +139,18 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 {
 	static xdev_buffer xsend_buffer;
 
-	if(len == 0)
-	{
-		xsend_buffer.usLen = strlen(str);
-	}
-	else
-	{
-		xsend_buffer.usLen = len;
-	}
-	memcpy(xsend_buffer.ucElement, str, xsend_buffer.usLen);
-	xQueueSend( *q, ( void * ) &xsend_buffer, portMAX_DELAY );
+	const int totalLength = (len == 0 ? strlen(str) : len);
+	int offset = 0;
 
-	ESP_LOG_BUFFER_HEXDUMP(TAG, xsend_buffer.ucElement, xsend_buffer.usLen, ESP_LOG_INFO);
+	while (offset < totalLength) {
+		xsend_buffer.usLen = MIN(totalLength - offset, sizeof(xsend_buffer.ucElement));
+		memcpy(xsend_buffer.ucElement, str + offset, xsend_buffer.usLen);
+		xQueueSend( *q, &xsend_buffer, portMAX_DELAY );
+		offset += xsend_buffer.usLen;
+	
+		ESP_LOG_BUFFER_HEXDUMP(TAG, xsend_buffer.ucElement, xsend_buffer.usLen, ESP_LOG_INFO);
+	}
 //	ESP_LOGI(TAG, "%s", str);
-
-	memset(xsend_buffer.ucElement, 0, sizeof(xsend_buffer.ucElement));
-	xsend_buffer.usLen = 0;
 }
 
 bool fnHasNewData()
@@ -168,8 +164,9 @@ static void host_rx_task(void *pvParameters)
 	{
 		twai_message_t tx_msg;
 
-		memset(ucTCP_RX_Buffer.ucElement,0, DEV_BUFFER_LENGTH);
-		xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, portMAX_DELAY);
+		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, portMAX_DELAY) != pdTRUE) {
+			continue;
+		}
 
 		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
 
@@ -203,11 +200,11 @@ static void host_rx_task(void *pvParameters)
 		}
 		else if(protocol == REALDASH)
 		{
-			ESP_LOG_BUFFER_HEX(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen);
+			ESP_LOG_BUFFER_HEX(TAG, msg_ptr, temp_len);
 
-			if(real_dash_parse_66(&tx_msg, ucTCP_RX_Buffer.ucElement) == 0)
+			if(real_dash_parse_66(&tx_msg, msg_ptr) == 0)
 			{
-				real_dash_parse_44(&tx_msg, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen);
+				real_dash_parse_44(&tx_msg, msg_ptr, temp_len);
 			}
 
 			tx_msg.self = 0;
@@ -221,11 +218,11 @@ static void host_rx_task(void *pvParameters)
 		{
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
 			{
-				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue, fnHasNewData);
+				elm327_process_cmd(msg_ptr, temp_len, &xMsg_Tx_Queue, fnHasNewData);
 			}
 			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
 			{
-				elm327_process_cmd(msg_ptr, temp_len, &tx_msg, &xmsg_ble_tx_queue, fnHasNewData);
+				elm327_process_cmd(msg_ptr, temp_len, &xmsg_ble_tx_queue, fnHasNewData);
 			}
 		}
 	}
@@ -264,11 +261,11 @@ static void can_rx_task(void *pvParameters)
         {
 //        	num_msg++;
 
-			ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
-				(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
-				(unsigned int)rx_msg.data[0], (unsigned int)rx_msg.data[1], (unsigned int)rx_msg.data[2],
-				(unsigned int)rx_msg.data[3], (unsigned int)rx_msg.data[4], (unsigned int)rx_msg.data[5],
-				(unsigned int)rx_msg.data[6], (unsigned int)rx_msg.data[7]);
+			// ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
+			// 	(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
+			// 	(unsigned int)rx_msg.data[0], (unsigned int)rx_msg.data[1], (unsigned int)rx_msg.data[2],
+			// 	(unsigned int)rx_msg.data[3], (unsigned int)rx_msg.data[4], (unsigned int)rx_msg.data[5],
+			// 	(unsigned int)rx_msg.data[6], (unsigned int)rx_msg.data[7]);
 
         	process_led(1);
 
@@ -283,7 +280,7 @@ static void can_rx_task(void *pvParameters)
         	//TODO: optimize, useless ifs
 			if(tcp_port_open() || ble_connected() || project_hardware_rev == WICAN_USB_V100 || mqtt_connected())
 			{
-				memset(ucTCP_TX_Buffer.ucElement, 0, sizeof(ucTCP_TX_Buffer.ucElement));
+				ucTCP_TX_Buffer.ucElement[0] = 0;
 				ucTCP_TX_Buffer.usLen = 0;
 
 				if(protocol == SLCAN)

@@ -26,6 +26,6 @@
 #define ELM327_CAN_TX   0x02
 
 void elm327_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q), QueueHandle_t *rx_queue, void (*can_log)(twai_message_t* frame, uint8_t type));
-void elm327_process_cmd(uint8_t *buf, uint8_t len, twai_message_t *frame, QueueHandle_t *q, bool (*fnHasNewData)());
+void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHasNewData)());
 int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame);
 #endif

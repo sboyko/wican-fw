@@ -52,16 +52,17 @@
 /* Attributes State Machine */
 enum
 {
-    IDX_SVC,
-    IDX_CHAR_A,
-    IDX_CHAR_VAL_A,
-    IDX_CHAR_CFG_A,
-//
-//    IDX_CHAR_B,
-//    IDX_CHAR_VAL_B,
-//
-    IDX_CHAR_C,
-    IDX_CHAR_VAL_C,
+    IDX_SERVICE_COMM,
+    
+	IDX_CHAR_COMM_TX,
+    IDX_VALUE_COMM_TX,
+
+    IDX_CHAR_COMM_RX,
+    IDX_VALUE_COMM_RX,
+    //IDX_CHAR_DESC_COMM_RX,
+
+    IDX_CHAR_BLE_STATUS,
+    IDX_VALUE_BLE_STATUS,
 
     HRS_IDX_NB,
 };
@@ -82,8 +83,10 @@ static uint8_t adv_config_done = 0;
 #define EXT_ADV_DURATION                          0
 #define EXT_ADV_MAX_EVENTS                        0
 
-#define GATTS_DEMO_CHAR_VAL_LEN_MAX               0x40
-#define BLE_SEND_BUF_SIZE                         490
+// see https://punchthrough.com/maximizing-ble-throughput-part-3-data-length-extension-dle-2/
+//
+#define BLE_ATT_DATA_MIN_SIZE                     20
+#define BLE_ATT_DATA_MAX_SIZE                     244
 
 static uint8_t dev_name[32] = {0};
 static uint8_t manufacturer[]="MeatPi";
@@ -120,8 +123,8 @@ static uint8_t sec_service_uuid[16] = {
 static esp_ble_adv_data_t heart_rate_adv_config = {
     .set_scan_rsp = false,
     .include_txpower = true,
-    .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
-    .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
+    .min_interval = ESP_BLE_CONN_INT_MIN, //slave connection min interval, Time = min_interval * 1.25 msec
+    .max_interval = ESP_BLE_CONN_INT_MIN, //slave connection max interval, Time = max_interval * 1.25 msec
     .appearance = 0x00,
     .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
     .p_manufacturer_data =  NULL, //&test_manufacturer[0],
@@ -187,74 +190,73 @@ static struct gatts_profile_inst heart_rate_profile_tab[HEART_PROFILE_NUM] = {
 
 static QueueHandle_t *xBle_TX_Queue = NULL, *xBle_RX_Queue = NULL;
 /* Service */
-//static const uint16_t GATTS_SERVICE_UUID_TEST      = 0x00FF;
-//static const uint16_t GATTS_CHAR_UUID_TEST_A       = 0xFF01;
-//static const uint16_t GATTS_CHAR_UUID_TEST_B       = 0xFF02;
-//static const uint16_t GATTS_CHAR_UUID_TEST_C       = 0xFF03;
-//66 33 22 11 BB 00 00 00 11 00 00 00 33 00 00 00 A4 3C D9 49
-static const uint16_t GATTS_SERVICE_UUID_TEST      = 0xfee0;
-static const uint16_t GATTS_CHAR_UUID_TEST_A       = 0xfee1;
-//static const uint16_t GATTS_CHAR_UUID_TEST_B       = 0xfee2;
-static const uint16_t GATTS_CHAR_UUID_TEST_C       = 0xfee3;
+static const uint16_t GATTS_UUID_COMM_SERVICE      = 0xfee0;
+static const uint16_t GATTS_UUID_COMM_CHAR_TX      = 0xfee1;
+static const uint16_t GATTS_UUID_COMM_CHAR_RX      = 0xfee2;
+static const uint16_t GATTS_UUID_BLE_STATUS        = 0xfee3;
 
 static const uint16_t primary_service_uuid         = ESP_GATT_UUID_PRI_SERVICE;
 static const uint16_t character_declaration_uuid   = ESP_GATT_UUID_CHAR_DECLARE;
-static const uint16_t character_client_config_uuid = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
+//static const uint16_t character_client_config_uuid = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
 //static const uint8_t char_prop_read                = ESP_GATT_CHAR_PROP_BIT_READ;
-//static const uint8_t char_prop_read_notify_ind         = ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY|ESP_GATT_CHAR_PROP_BIT_INDICATE;
-//static const uint8_t char_prop_write               = ESP_GATT_CHAR_PROP_BIT_WRITE;
-static const uint8_t char_prop_read_write_notify   = ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY;
-//static const uint8_t char_prop_read_write   = ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_READ;
-static const uint8_t heart_measurement_ccc[2]      = {0x00, 0x00};
-static const uint8_t char_value[20]                 = {0x11, 0x22, 0x33, 0x44};
+static const uint8_t char_prop_notify_ind          = ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_INDICATE;
+static const uint8_t char_prop_write               = ESP_GATT_CHAR_PROP_BIT_WRITE_NR | ESP_GATT_CHAR_PROP_BIT_WRITE;
+static const uint8_t char_prop_read_write_notify   = ESP_GATT_CHAR_PROP_BIT_WRITE_NR | ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY;
+//static const uint8_t char_prop_read_write          = ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_READ;
+//static const uint8_t heart_measurement_ccc[2]      = {0x00, 0x00};
 #define CHAR_DECLARATION_SIZE       (sizeof(uint8_t))
-#define SVC_INST_ID                 0
-static uint16_t spp_mtu_size = 23;
+//#define SVC_INST_ID                 0
+static const uint8_t no_value = 0;
 static uint16_t spp_conn_id = 0xffff;
 static esp_gatt_if_t spp_gatts_if = 0xff;
 // If the client sends a larger MTU size, the ble_max_data_size will be set to
-// the minium of BLE_SEND_BUF_SIZE and (spp_mtu_size - 3).
+// the minium of BLE_ATT_DATA_MAX_SIZE and (spp_mtu_size - 3).
 // Since the default MTU size is 23 this is initially set to 20
-static uint16_t ble_max_data_size = 20;
-static bool is_connected = false;
-static uint8_t test1[] = {0x66 ,0x33 ,0x22 ,0x11 ,0xBB ,0x00 ,0x00 ,0x00 ,0x11 ,0x00 ,0x00 ,0x00 ,0x33 ,0x00 ,0x00 ,0x00 ,0xA4 ,0x3C ,0xD9 ,0x49};
+static uint16_t ble_max_data_size = BLE_ATT_DATA_MIN_SIZE;
+//static bool is_connected = false;
+
 /* Full Database Description - Used to add attributes into the database */
 static const esp_gatts_attr_db_t gatt_db[HRS_IDX_NB] =
 {
 	    // Service Declaration
-	    [IDX_SVC]        =
+	    [IDX_SERVICE_COMM] =
 	    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&primary_service_uuid, ESP_GATT_PERM_READ,
-	      sizeof(uint16_t), sizeof(GATTS_SERVICE_UUID_TEST), (uint8_t *)&GATTS_SERVICE_UUID_TEST}},
+			sizeof(GATTS_UUID_COMM_SERVICE), sizeof(GATTS_UUID_COMM_SERVICE), (uint8_t *)&GATTS_UUID_COMM_SERVICE}},
 
 	    /* Characteristic Declaration */
-	    [IDX_CHAR_A]     =
+	    [IDX_CHAR_COMM_TX] =
 	    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
-	      CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_write_notify}},
+	    	CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_write}},
 
-	    // NOTE: This is the notify characteristic used to send data to the client
-	    // It currently uses GATTS_DEMO_CHAR_VAL_LEN_MAX which is set to 64 (0x40).
-	    // However more bytes might be sent over this characteristic.
-	    // In the ESP SPP demo code the characteristic size is 512 which seems to
-	    // be the max MTU supported by BLE.
 	    /* Characteristic Value */
-	    [IDX_CHAR_VAL_A] =
-	    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_TEST_A, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-	      GATTS_DEMO_CHAR_VAL_LEN_MAX, sizeof(test1), (uint8_t *)test1}},
+	    [IDX_VALUE_COMM_TX] =
+	    {{ESP_GATT_RSP_BY_APP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_UUID_COMM_CHAR_TX, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+			BLE_ATT_DATA_MIN_SIZE, 0, NULL}},
 
-	    /* Client Characteristic Configuration Descriptor */
-	    [IDX_CHAR_CFG_A]  =
-	    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-	      sizeof(uint16_t), sizeof(heart_measurement_ccc), (uint8_t *)heart_measurement_ccc}},
+	    /* Characteristic Declaration */
+	    [IDX_CHAR_COMM_RX] =
+	    {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
+	    	CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_notify_ind}},
+
+	    /* Characteristic Value */
+	    [IDX_VALUE_COMM_RX] =
+	    {{ESP_GATT_RSP_BY_APP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_UUID_COMM_CHAR_RX, ESP_GATT_PERM_READ,
+			BLE_ATT_DATA_MIN_SIZE, 0, NULL}},
+
+	    // /* Client Characteristic Configuration Descriptor */
+	    // [IDX_CHAR_DESC_COMM_RX]  =
+	    // {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+	    //   sizeof(heart_measurement_ccc), sizeof(heart_measurement_ccc), (uint8_t *)heart_measurement_ccc}},
 
 		/* Characteristic Declaration */
-		[IDX_CHAR_C]      =
+		[IDX_CHAR_BLE_STATUS] =
 		{{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_declaration_uuid, ESP_GATT_PERM_READ,
-		  CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_write_notify}},
+			CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&char_prop_read_write_notify}},
 
 		/* Characteristic Value */
-		[IDX_CHAR_VAL_C]  =
-		{{ESP_GATT_RSP_BY_APP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_CHAR_UUID_TEST_C, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-		  GATTS_DEMO_CHAR_VAL_LEN_MAX, sizeof(char_value), (uint8_t *)char_value}},
+		[IDX_VALUE_BLE_STATUS] =
+		{{ESP_GATT_RSP_BY_APP}, {ESP_UUID_LEN_16, (uint8_t *)&GATTS_UUID_BLE_STATUS, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+			CHAR_DECLARATION_SIZE, CHAR_DECLARATION_SIZE, (uint8_t *)&no_value}},
 
 };
 
@@ -342,12 +344,12 @@ static void show_bonded_devices(void)
 
     esp_ble_bond_dev_t *dev_list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * dev_num);
     esp_ble_get_bond_device_list(&dev_num, dev_list);
-    ESP_LOGI(GATTS_TABLE_TAG, "Bonded devices number : %d\n", dev_num);
 
-    ESP_LOGI(GATTS_TABLE_TAG, "Bonded devices list : %d\n", dev_num);
+    ESP_LOGI(GATTS_TABLE_TAG, "Bonded devices list : %d", dev_num);
     for (int i = 0; i < dev_num; i++) {
-        esp_log_buffer_hex(GATTS_TABLE_TAG, (void *)dev_list[i].bd_addr, sizeof(esp_bd_addr_t));
+        esp_log_buffer_hex(GATTS_TABLE_TAG, (void *)&dev_list[i].bond_key, sizeof(esp_ble_bond_key_info_t));
     }
+	ESP_LOGI(GATTS_TABLE_TAG, "");
 
     free(dev_list);
 }
@@ -365,9 +367,16 @@ static void __attribute__((unused)) remove_all_bonded_devices(void)
     free(dev_list);
 }
 
+static void logBtDeviceAddress(const char* logPrefix, const esp_bd_addr_t bd_addr)
+{
+	ESP_LOGI(GATTS_TABLE_TAG, "%s: %08x%04x", logPrefix,
+		(bd_addr[0] << 24) + (bd_addr[1] << 16) + (bd_addr[2] << 8) + bd_addr[3],
+		(bd_addr[4] << 8) + bd_addr[5]);
+}
+
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
-    ESP_LOGV(GATTS_TABLE_TAG, "GAP_EVT, event %d\n", event);
+    ESP_LOGI(GATTS_TABLE_TAG, "GAP_EVT, event %d", event);
 
     switch (event) {
     case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
@@ -427,11 +436,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         ESP_LOGI(GATTS_TABLE_TAG, "key type = %s", esp_key_type_to_str(param->ble_security.ble_key.key_type));
         break;
     case ESP_GAP_BLE_AUTH_CMPL_EVT: {
-        esp_bd_addr_t bd_addr;
-        memcpy(bd_addr, param->ble_security.auth_cmpl.bd_addr, sizeof(esp_bd_addr_t));
-        ESP_LOGI(GATTS_TABLE_TAG, "remote BD_ADDR: %08x%04x",\
-                (bd_addr[0] << 24) + (bd_addr[1] << 16) + (bd_addr[2] << 8) + bd_addr[3],
-                (bd_addr[4] << 8) + bd_addr[5]);
+		logBtDeviceAddress("remote BD_ADDR", param->ble_security.auth_cmpl.bd_addr);
         ESP_LOGI(GATTS_TABLE_TAG, "address type = %d", param->ble_security.auth_cmpl.addr_type);
         ESP_LOGI(GATTS_TABLE_TAG, "pair status = %s",param->ble_security.auth_cmpl.success ? "success" : "fail");
         if(!param->ble_security.auth_cmpl.success) {
@@ -440,7 +445,15 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             ESP_LOGI(GATTS_TABLE_TAG, "auth mode = %s",esp_auth_req_to_str(param->ble_security.auth_cmpl.auth_mode));
         }
         show_bonded_devices();
-        break;
+
+		esp_gap_conn_params_t conn_params = {0};
+		if (esp_ble_get_current_conn_params(param->ble_security.auth_cmpl.bd_addr, &conn_params) == ESP_OK) {
+			ESP_LOGI(GATTS_TABLE_TAG, "current_conn_params: interval = %d , latency = %d , timeout = %d", conn_params.interval, conn_params.latency, conn_params.timeout);
+		} else {
+			ESP_LOGE(GATTS_TABLE_TAG, "get_current_conn_params() fails");
+		}
+
+		break;
     }
     case ESP_GAP_BLE_REMOVE_BOND_DEV_COMPLETE_EVT: {
         ESP_LOGD(GATTS_TABLE_TAG, "ESP_GAP_BLE_REMOVE_BOND_DEV_COMPLETE_EVT status = %d", param->remove_bond_dev_cmpl.status);
@@ -492,7 +505,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             break;
         case ESP_GATTS_READ_EVT:
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_READ_EVT");
-            if(profile_handle_table[IDX_CHAR_VAL_C] == param->read.handle)
+            if(profile_handle_table[IDX_VALUE_BLE_STATUS] == param->read.handle)
             {
             	memset(&rsp, 0, sizeof(esp_gatt_rsp_t));
             	rsp.attr_value.handle = param->read.handle;
@@ -507,14 +520,19 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT, write value:");
             esp_log_buffer_hex(GATTS_TABLE_TAG, param->write.value, param->write.len);
 
-            if(profile_handle_table[IDX_CHAR_VAL_A] == param->write.handle)
+            if(profile_handle_table[IDX_VALUE_COMM_TX] == param->write.handle)
             {
-				memcpy(rx_buffer.ucElement, param->write.value, param->write.len);
 				rx_buffer.dev_channel = DEV_BLE;
-				rx_buffer.usLen = param->write.len;
-				xQueueSend(*xBle_RX_Queue, ( void * ) &rx_buffer, portMAX_DELAY );
+
+				int offset = 0;
+				while (offset < param->write.len) {
+					rx_buffer.usLen = MIN(param->write.len - offset, sizeof(rx_buffer.ucElement));
+					memcpy(rx_buffer.ucElement, param->write.value + offset, rx_buffer.usLen);
+					xQueueSend(*xBle_RX_Queue, &rx_buffer, portMAX_DELAY );
+					offset += rx_buffer.usLen;
+				}
             }
-            else if(profile_handle_table[IDX_CHAR_VAL_C] == param->write.handle)
+            else if(profile_handle_table[IDX_VALUE_BLE_STATUS] == param->write.handle)
             {
             	if(param->write.len == 1 && (param->write.value[0] == 0 || param->write.value[0] == 1))
             	{
@@ -535,13 +553,13 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             //
             // As noted in above the call to esp_ble_gatt_set_local_mtu is not sent by
             // Car Scanner ELM OBD2 on Android. So it uses the default MTU of 23.
-            spp_mtu_size = param->mtu.mtu;
+            const int spp_mtu_size = param->mtu.mtu;
             // Each BLE packet has 3 header bytes, so the actual amount of data that
             // can be sent is (MTU - 3).
             //
-            // set the max data size to the minimum of (spp_mtu_size - 3) and BLE_SEND_BUF_SIZE
-            ble_max_data_size = BLE_SEND_BUF_SIZE <= (spp_mtu_size - 3) ? BLE_SEND_BUF_SIZE : (spp_mtu_size -3);
-            ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_MTU_EVT: %d", spp_mtu_size);
+            // set the max data size to the minimum of (spp_mtu_size - 3) and BLE_ATT_DATA_MAX_SIZE
+            ble_max_data_size = BLE_ATT_DATA_MAX_SIZE <= (spp_mtu_size - 3) ? BLE_ATT_DATA_MAX_SIZE : (spp_mtu_size -3);
+            ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_MTU_EVT, mtu_size = %d, ble_buf_size = %d", spp_mtu_size, ble_max_data_size);
             break;
         case ESP_GATTS_CONF_EVT:
             break;
@@ -558,9 +576,25 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
         	config_server_stop();
         	wifi_network_deinit();
 
+			logBtDeviceAddress("remote BD_ADDR", param->connect.remote_bda);
+
+			esp_ble_conn_update_params_t conn_params = {0};
+			memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+			conn_params.latency = 0;
+			conn_params.min_int = ESP_BLE_CONN_INT_MIN;
+			conn_params.max_int = ESP_BLE_CONN_INT_MIN;
+			conn_params.timeout = ESP_BLE_CONN_SUP_TOUT_MAX / 4;
+
+			if (esp_ble_gap_update_conn_params(&conn_params) == ESP_OK) {
+				ESP_LOGI(GATTS_TABLE_TAG, "update_conn_params: interval_min = %d , interval_max = %d , latency = %d , timeout = %d",
+					conn_params.min_int, conn_params.max_int, conn_params.latency, conn_params.timeout);
+			} else {
+				ESP_LOGE(GATTS_TABLE_TAG, "update(conn_params) fails");
+			}
+
     	    spp_conn_id = param->connect.conn_id;
     	    spp_gatts_if = gatts_if;
-    	    is_connected = true;
+    	    //is_connected = true;
     	    xEventGroupSetBits(s_ble_event_group, BLE_CONNECTED_BIT);
     	    gpio_set_level(conn_led, 0);
             /* start security connect with peer device when receive the connect event sent by the master */
@@ -570,7 +604,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, disconnect reason 0x%x", param->disconnect.reason);
 //            wifi_network_restart();
 //        	config_server_restart();
-            is_connected = false;
+            //is_connected = false;
             gpio_set_level(conn_led, 1);
             /* start advertising again when missing the connect */
             esp_ble_gap_start_advertising(&heart_rate_adv_params);
@@ -602,7 +636,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
                 if(param->add_attr_tab.num_handle == HRS_IDX_NB) {
                     memcpy(profile_handle_table, param->add_attr_tab.handles,
                     sizeof(profile_handle_table));
-                    esp_ble_gatts_start_service(profile_handle_table[IDX_SVC]);
+                    esp_ble_gatts_start_service(profile_handle_table[IDX_SERVICE_COMM]);
                 }else{
                     ESP_LOGE(GATTS_TABLE_TAG, "Create attribute table abnormally, num_handle (%d) doesn't equal to HRS_IDX_NB(%d)",
                          param->add_attr_tab.num_handle, HRS_IDX_NB);
@@ -651,7 +685,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 static void ble_task(void *pvParameters)
 {
 	static xdev_buffer tx_buffer;
-	static uint8_t ble_send_buf[BLE_SEND_BUF_SIZE];
+	static uint8_t ble_send_buf[BLE_ATT_DATA_MAX_SIZE];
 	static uint32_t ble_send_buf_len = 0;
 	static uint32_t num_msg = 0;
 	static int64_t time_old = 0;
@@ -794,13 +828,18 @@ bool ble_tx_ready(void)
 }
 void ble_send(uint8_t* buf, uint8_t buf_len)
 {
-	if(ble_tx_ready())
-	{
-		esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, profile_handle_table[IDX_CHAR_VAL_A],buf_len, buf, false);
+	//if(ble_tx_ready())
+	//{
+		const esp_err_t result = esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, profile_handle_table[IDX_VALUE_COMM_RX], buf_len, buf, false);
+		if (result != ESP_OK) {
+			ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
+		} else {
+			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
+		}
 		// The ESP SPP server demo adds a 20ms delay after each send.
 		// It doesn't seem like it is needed in the WiCAN case.
 		// vTaskDelay(20 / portTICK_PERIOD_MS);
-	}
+	//}
 }
 static uint32_t ble_pass_key = 0;
 void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, int passkey, uint8_t* uid)
@@ -846,7 +885,8 @@ void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t conn
 	}
 
 	ESP_LOGI(GATTS_TABLE_TAG, "%s init bluetooth", __func__);
-	ret = esp_bluedroid_init();
+	esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
+	ret = esp_bluedroid_init_with_cfg(&cfg);
 	if (ret) {
 		ESP_LOGE(GATTS_TABLE_TAG, "%s init bluetooth failed: %s", __func__, esp_err_to_name(ret));
 		return;
