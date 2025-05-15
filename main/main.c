@@ -162,9 +162,12 @@ static void host_rx_task(void *pvParameters)
 {
 	while(1)
 	{
-		twai_message_t tx_msg;
+		const uint8_t perm_delay = (protocol == OBD_ELM327 ? elm327_perm_delay() : 0);
 
-		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, portMAX_DELAY) != pdTRUE) {
+		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
+			if(perm_delay > 0) {
+				elm327_process_perm_cmd(&xMsg_Tx_Queue, fnHasNewData);
+			}
 			continue;
 		}
 
@@ -177,11 +180,13 @@ static void host_rx_task(void *pvParameters)
 		{
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS)
 			{
+				twai_message_t tx_msg;
 				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xmsg_ws_tx_queue);
 			}
 		}
 		if(protocol == SLCAN)
 		{
+			twai_message_t tx_msg;
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
 			{
 				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
@@ -200,8 +205,7 @@ static void host_rx_task(void *pvParameters)
 		}
 		else if(protocol == REALDASH)
 		{
-			ESP_LOG_BUFFER_HEX(TAG, msg_ptr, temp_len);
-
+			twai_message_t tx_msg;
 			if(real_dash_parse_66(&tx_msg, msg_ptr) == 0)
 			{
 				real_dash_parse_44(&tx_msg, msg_ptr, temp_len);
@@ -212,6 +216,7 @@ static void host_rx_task(void *pvParameters)
 		}
 		else if(protocol == SAVVYCAN)
 		{
+			twai_message_t tx_msg;
 			gvret_parse(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
 		}
 		else if(protocol == OBD_ELM327)
@@ -227,40 +232,15 @@ static void host_rx_task(void *pvParameters)
 		}
 	}
 }
-#define HEAP_CAPS   (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+
 static void can_rx_task(void *pvParameters)
 {
-//	static uint32_t num_msg = 0;
-	static int64_t time_old = 0;
-//	float bvoltage = 0;
-//	time_old = esp_timer_get_time();
+    static twai_message_t rx_msg;
+
 	while(1)
 	{
-        static twai_message_t rx_msg;
-//        esp_err_t ret = 0xFF;
-
-
-//    	time_old = esp_timer_get_time();
-//    	if((esp_timer_get_time() - time_old) > 1000000)
-//    	{
-//    		sleep_mode_get_voltage(&bvoltage);
-//    		time_old = esp_timer_get_time();
-//
-//    		ESP_LOGI(TAG, "bvoltage: %f", bvoltage);
-//    	}
-        process_led(0);
-    	if(esp_timer_get_time() - time_old > 1000*1000)
-    	{
-    		// uint32_t free_heap = heap_caps_get_free_size(HEAP_CAPS);
-    		// time_old = esp_timer_get_time();
-    		// ESP_LOGI(TAG, "free_heap: %lu", free_heap);
-// //        		ESP_LOGI(TAG, "msg %u/sec", num_msg);
-// //        		num_msg = 0;
-    	}
-        while(can_receive(&rx_msg, 0) ==  ESP_OK)
+        if(can_receive(&rx_msg, pdMS_TO_TICKS(2)) ==  ESP_OK)
         {
-//        	num_msg++;
-
 			// ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
 			// 	(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
 			// 	(unsigned int)rx_msg.data[0], (unsigned int)rx_msg.data[1], (unsigned int)rx_msg.data[2],
@@ -301,8 +281,6 @@ static void can_rx_task(void *pvParameters)
 				}
 
 
-
-
 				if(ucTCP_TX_Buffer.usLen != 0)
 				{
 					if(tcp_port_open())
@@ -322,6 +300,7 @@ static void can_rx_task(void *pvParameters)
 					}
 				}
 			}
+
 			if(mqtt_connected())
 			{
 				static mqtt_can_message_t mqtt_rx_msg;
@@ -349,9 +328,13 @@ static void can_rx_task(void *pvParameters)
 				}
 			}
         }
-        vTaskDelay(pdMS_TO_TICKS(1));
+		else
+		{
+	        process_led(0);
+		}
 	}
 }
+
 static uint8_t derived_mac_addr[6] = {0};
 static uint8_t uid[33];
 static uint8_t ble_uid[33];

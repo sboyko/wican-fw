@@ -344,6 +344,39 @@ esp_err_t can_send(twai_message_t *message, TickType_t ticks_to_wait)
 	if(uxBits & CAN_ENABLE_BIT)
 	{
 		return twai_transmit(message, ticks_to_wait);
+
+		/*
+		esp_err_t result = twai_transmit(message, ticks_to_wait);
+		if (result != ESP_OK) {
+			return result;
+		}
+
+		uint32_t alerts = 0;
+		while (true) {
+			alerts = 0;
+			result = twai_read_alerts(&alerts, ticks_to_wait * 2);
+			
+			if (result == ESP_ERR_TIMEOUT) {
+				if (twai_clear_transmit_queue() != ESP_OK) {
+					ESP_LOGE(TAG, "twai_clear_transmit_queue() fails");
+				}
+				ESP_LOGW(TAG, "repeat twai_transmit()");
+				return twai_transmit(message, ticks_to_wait);
+			}
+
+			if (result != ESP_OK) {
+				ESP_LOGE(TAG, "twai_read_alerts() fails: %d", result);
+				return result;
+			}
+			if (alerts & TWAI_ALERT_TX_SUCCESS) {
+				return ESP_OK;
+			} else {
+				ESP_LOGE(TAG, "unknown alerts: %u", (unsigned int)alerts);
+				return result;
+			}
+		}
+		*/
+
 	}
 	else return ESP_ERR_INVALID_STATE;
 }

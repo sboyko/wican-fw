@@ -765,7 +765,7 @@ static void ble_task(void *pvParameters)
 			//										pdFALSE,
 			//										portMAX_DELAY);
 			//					ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, ble_send_buf, ble_send_buf_len, ESP_LOG_INFO);
-			//					vTaskDelay(pdMS_TO_TICKS(30000));
+			
 								ble_send(ble_send_buf, ble_send_buf_len);
 								ble_send_buf_len = 0;
 								if(--free_packet == 0 && tx_buffer_remaining > 0)
@@ -836,9 +836,6 @@ void ble_send(uint8_t* buf, uint8_t buf_len)
 		} else {
 			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
 		}
-		// The ESP SPP server demo adds a 20ms delay after each send.
-		// It doesn't seem like it is needed in the WiCAN case.
-		// vTaskDelay(20 / portTICK_PERIOD_MS);
 	//}
 }
 static uint32_t ble_pass_key = 0;
