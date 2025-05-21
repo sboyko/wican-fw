@@ -99,6 +99,22 @@ static void log_can_to_mqtt(twai_message_t *frame, uint8_t type)
 	mqtt_msg.type = type;
 	xQueueSend( xmsg_mqtt_rx_queue, ( void * ) &mqtt_msg, pdMS_TO_TICKS(0) );
 }
+
+static void elm327_log_can(twai_message_t *frame, uint8_t type)
+{
+#ifndef NDEBUG
+	char buff[40];
+	int offset = elm327_print_canid(buff, frame);
+
+	for (int i = 0; i < TWAI_FRAME_MAX_DLC && i < frame->data_length_code; i++) {
+		offset += sprintf(buff + offset, " %02X", frame->data[i]);
+	}
+
+	const char* tag = (type == ELM327_CAN_TX ? "can_tx_task" : "can_rx_task");
+	ESP_LOGI(tag, "%s", buff);
+#endif
+}
+
 static void process_led(bool state)
 {
 	static bool current_state;
@@ -148,9 +164,10 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 		xQueueSend( *q, &xsend_buffer, portMAX_DELAY );
 		offset += xsend_buffer.usLen;
 	
+#ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, xsend_buffer.ucElement, xsend_buffer.usLen, ESP_LOG_INFO);
+#endif
 	}
-//	ESP_LOGI(TAG, "%s", str);
 }
 
 bool fnHasNewData()
@@ -171,7 +188,9 @@ static void host_rx_task(void *pvParameters)
 			continue;
 		}
 
+#ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
+#endif
 
 		uint8_t* msg_ptr = ucTCP_RX_Buffer.ucElement;
 		int temp_len = ucTCP_RX_Buffer.usLen;
@@ -441,7 +460,7 @@ void app_main(void)
 		}
 		else
 		{
-			elm327_init(&host_tx_task, &xmsg_obd_rx_queue, NULL);
+			elm327_init(&host_tx_task, &xmsg_obd_rx_queue, elm327_log_can);
 		}
 	}
 
@@ -557,6 +576,5 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_INFO);
+	esp_log_level_set("*", ESP_LOG_WARN);
 }
-

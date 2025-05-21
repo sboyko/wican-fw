@@ -142,18 +142,26 @@ typedef struct _xelm327_cmd
 	const elm327_command_callback command_interpreter;
 }xelm327_cmd_t;
 
-
-static esp_err_t can_tx_task(twai_message_t *message, TickType_t ticks_to_wait)
+static esp_err_t can_tx_task(twai_message_t *message)
 {
-	ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
-		(unsigned int)(message->identifier&TWAI_EXTD_ID_MASK), (message->extd ? 'x' : ' '),
-		(unsigned int)message->data[0], (unsigned int)message->data[1], (unsigned int)message->data[2],
-		(unsigned int)message->data[3], (unsigned int)message->data[4], (unsigned int)message->data[5],
-		(unsigned int)message->data[6], (unsigned int)message->data[7]);
+	if( elm327_can_log != NULL) {
+		elm327_can_log(message, ELM327_CAN_TX);
+	}
 
-	const esp_err_t result = can_send(message, ticks_to_wait);
-	if (result != ESP_OK) {
-		ESP_LOGE(TAG, "can_send() fails: %d", result);
+	const TickType_t one_ms = pdMS_TO_TICKS(1);
+	int retry_count = 5;
+
+	esp_err_t result = can_send(message, one_ms);
+	while (result != ESP_OK) {
+		if ((result == ESP_FAIL || result == ESP_ERR_TIMEOUT) && --retry_count >= 0) {
+			ESP_LOGE(TAG, "can_send() fails (repeat) , reason = 0x%04X", result);
+			vTaskDelay(one_ms);
+		} else {
+			ESP_LOGE(TAG, "can_send() fails (skip) , reason = 0x%04X", result);
+			break;
+		}
+		
+		result = can_send(message, one_ms);
 	}
 	return result;
 }
@@ -283,7 +291,7 @@ static char* elm327_monitor_all(const char* command_str)
 {
 	if (!elm327_config.monitor_all) {
 		elm327_config.monitor_all = 1;
-		ESP_LOGI(TAG, "Monitor All is on");
+		ESP_LOGW(TAG, "Monitor All is on");
 	}
 	return ""; // skip reply
 }
@@ -313,7 +321,7 @@ static esp_err_t elm327_send_can_cmd(const char* command)
 
 	elm327_fill_data_from_hex_str(command + offset, &txframe.data[0], 8);
 
-	return can_tx_task(&txframe, 1);
+	return can_tx_task(&txframe);
 }
 
 static char* elm327_special_send(const char* command_str)
@@ -396,6 +404,8 @@ static char* elm327_reset_all(const char* command_str)
 	elm327_set_default_config(false);
 
 	//elm327_set_filter(0xFFFFFFFF); // accept all CAN messages
+
+	ESP_LOGW(TAG, "Reset protocol");
 
 	return (char*)device_description;
 }
@@ -749,7 +759,7 @@ static uint8_t elm327_should_receive(twai_message_t *rx_frame)
 		if (identifier == elm327_config.rx_address) {
 			return true;
 		} else {
-			//ESP_LOGW(TAG, "skip by rx_address %08X%c", (unsigned int)(rx_frame->identifier&TWAI_EXTD_ID_MASK), (rx_frame->extd ? 'x' : ' '));
+			//ESP_LOGW(TAG, "skip by rx_address %08X", (unsigned int)rx_frame->identifier&TWAI_EXTD_ID_MASK);
 			return false;
 		}
 	}
@@ -846,12 +856,7 @@ static void elm327_send_flow_control_frame(twai_message_t *first_frame)
 		memcpy(txframe.data, elm327_config.fc_data, elm327_config.fc_data_length);
 	}
 
-	if( elm327_can_log != NULL)
-	{
-		elm327_can_log(&txframe, ELM327_CAN_TX);
-	}
-	
-	can_tx_task(&txframe, 1);
+	can_tx_task(&txframe);
 }
 
 static TickType_t elapsedTimeMs(int64_t txtime)
@@ -859,24 +864,12 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 	return (TickType_t)(((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
 }
 
- __attribute__((optimize("O0"))) static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
+static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)());
+
+/*__attribute__((optimize("O0")))*/ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
 {
 	static int rsp_nowait_count = 0;
-
-	//ESP_LOG_BUFFER_HEX(TAG, cmd, cmd_len);
-
-	if((elm327_config.protocol != '6') && (elm327_config.protocol != '8') && (elm327_config.protocol != '7') && (elm327_config.protocol != '9'))
-	{
-		if(elm327_config.protocol == '1' || elm327_config.protocol == '2') {
-			strcat(rsp, "NO DATA\r\r>");
-		} else {
-			strcat(rsp, "BUS INIT: ...ERROR\r\r>");
-		}
-
-		elm327_response(rsp, 0, queue);
-		return 0;
-	}
-
+	
 	twai_message_t txframe;
 	txframe.identifier = elm327_get_identifier();
 	txframe.extd = elm327_config.protocol == '7' || elm327_config.protocol == '9';
@@ -904,7 +897,7 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 	}
 	ESP_LOGI(TAG, "req_expected_rsp = %u", req_expected_rsp);
 
-	uint8_t cmd_data_length = cmd_len / 2;
+	const uint8_t cmd_data_length = cmd_len / 2;
 	if(elm327_config.allow_long_messages && cmd_data_length == 8)
 	{
 		elm327_fill_data_from_hex_str(cmd, &txframe.data[0], cmd_data_length);
@@ -924,40 +917,38 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 		elm327_fill_data_from_hex_str(cmd, &txframe.data[1], cmd_data_length);
 	}
 
-	if( elm327_can_log != NULL)
-	{
-		elm327_can_log(&txframe, ELM327_CAN_TX);
-	}
-
 	twai_message_t rx_frame;
 	if (req_expected_rsp != 0) {
 		while( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 0) ) {
 			// cleanup before new send request
-			ESP_LOGW(TAG, "skip before send %08X%c", (unsigned int)(rx_frame.identifier&TWAI_EXTD_ID_MASK), (rx_frame.extd ? 'x' : ' '));
+			ESP_LOGW(TAG, "skip before send %08X", (unsigned int)rx_frame.identifier&TWAI_EXTD_ID_MASK);
 		}
 	}
 
-	can_tx_task(&txframe, 1);
+	can_tx_task(&txframe);
 
 	if (req_expected_rsp == 0) {
-		//strcat((char*)rsp, "\r>");
-		//elm327_response(rsp, 0, queue);
 		rsp_nowait_count += 1;
 		if (rsp_nowait_count >= TX_QUEUE_LENGTH) {
 			rsp_nowait_count = 0;
 			vTaskDelay(pdMS_TO_TICKS(1));
 		}
-
 		return 0;
 	}
 	rsp_nowait_count = 0;
 
+	return elm327_request_wait_answer(req_expected_rsp, &txframe, rsp, queue, fnHasNewData);
+}
+
+static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
+{
 	TickType_t totalMs = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
 	const int64_t txtime = esp_timer_get_time();
 	uint8_t rsp_found = 0;
 	uint8_t number_of_rsp = 0;
 
 	uint8_t sendControlFrame = false;
+	twai_message_t rx_frame;
 
 	while (true)
 	{
@@ -966,10 +957,6 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 		if (xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 5)) {
 			totalMs += elapsedTimeMs(txtime_local);
 
-			if( elm327_can_log != NULL)
-			{
-				elm327_can_log(&rx_frame, ELM327_CAN_RX);
-			}
 			//reset timeout after response is received
 			rsp_found = 1;
 			number_of_rsp++;
@@ -1044,11 +1031,7 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 			// the PCI byte(s) (usually just data[0]) should be printed.
 			if(elm327_config.show_header)
 			{
-				if(rx_frame.extd == 0) {
-					sprintf(rsp, "%03lX", rx_frame.identifier&TWAI_STD_ID_MASK);
-				} else {
-					sprintf(rsp, "%08lX", rx_frame.identifier&TWAI_EXTD_ID_MASK);
-				}
+				elm327_print_canid(rsp, &rx_frame);
 				rx_frame_data_length = 8;
 			} else if(!elm327_config.auto_formatting) {
 				rx_frame_data_length = 8;
@@ -1083,13 +1066,13 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 
 			static const uint8_t BS_MAX = RX_QUEUE_LENGTH + 1; // esp32-can fails to receive more then (.rx_queue_len + 1) simultaneous CAN messages
 			if (sendControlFrame && ((number_of_rsp - 1) % BS_MAX) == 0) {
-				memset(txframe.data, 0xAA, 8);
+				memset(txframe->data, 0xAA, 8);
 
-				txframe.data[0] = 0x30;
-				txframe.data[1] = BS_MAX;
-				txframe.data[2] = 0x00; // zero duration between two consecutive frames
+				txframe->data[0] = 0x30;
+				txframe->data[1] = BS_MAX;
+				txframe->data[2] = 0x00; // zero duration between two consecutive frames
 
-				can_tx_task(&txframe, 1);
+				can_tx_task(txframe);
 			}
 		}
 		else
@@ -1315,18 +1298,16 @@ int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame)
 {
 	// Let elm327.c decide which messages to process
 	if (elm327_should_receive(frame)) {
+		if( elm327_can_log != NULL) {
+			elm327_can_log(frame, ELM327_CAN_RX);
+		}
+
 		if (xQueueSend(*can_rx_queue, frame, pdMS_TO_TICKS(0)) != pdTRUE) {
-			ESP_LOGE(TAG, "fails to queue %08X%c", (unsigned int)(frame->identifier&TWAI_EXTD_ID_MASK), (frame->extd ? 'x' : ' '));
+			ESP_LOGE(TAG, "xQueueSend() fails , reason = 'queue full'");
 		}
 	} else if (elm327_config.monitor_all) {
 		char* rsp = (char*)buf;
-		int offset = 0;
-
-		if (frame->extd == 0) {
-			offset += sprintf(rsp, "%03lX", frame->identifier&TWAI_STD_ID_MASK);
-		} else {
-			offset += sprintf(rsp, "%08lX", frame->identifier&TWAI_EXTD_ID_MASK);
-		}
+		int offset = elm327_print_canid(rsp, frame);
 
 		for (int i = 0; i < TWAI_FRAME_MAX_DLC; i++) {
 			offset += sprintf(rsp + offset, "%02X", frame->data[i]);
@@ -1338,6 +1319,15 @@ int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame)
 	}
 	
 	return 0;
+}
+
+int elm327_print_canid(char *buff, twai_message_t *frame)
+{
+	if (frame->extd == 0) {
+		return sprintf(buff, "%03X", (unsigned int)frame->identifier&TWAI_STD_ID_MASK);
+	} else {
+		return sprintf(buff, "%08X", (unsigned int)frame->identifier&TWAI_EXTD_ID_MASK);
+	}
 }
 
 void elm327_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q), QueueHandle_t *rx_queue, void (*can_log)(twai_message_t* frame, uint8_t type))

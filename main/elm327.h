@@ -30,4 +30,5 @@ void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHa
 void elm327_process_perm_cmd(QueueHandle_t *q, bool (*fnHasNewData)());
 uint8_t elm327_perm_delay();
 int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame);
+int elm327_print_canid(char *buff, twai_message_t *frame);
 #endif

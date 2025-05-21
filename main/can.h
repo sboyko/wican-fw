@@ -28,7 +28,7 @@
 #define CAN_STDBY_GPIO_NUM			6
 
 // looks like the total sum (tx + rx) can't be greater than 14
-#define TX_QUEUE_LENGTH             4
+#define TX_QUEUE_LENGTH             1
 #define RX_QUEUE_LENGTH             10
 
 #define CAN_5K				0

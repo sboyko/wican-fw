@@ -22,7 +22,7 @@
 //#include "esp_log.h"
 #include "driver/twai.h"
 
-static const uint32_t Crc32(const uint8_t* data, size_t numBytes)
+static uint32_t Crc32(const uint8_t* data, size_t numBytes)
 {
     static const uint32_t table[256] = {
         0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,0xE963A535,
@@ -154,9 +154,6 @@ uint8_t real_dash_parse_66(twai_message_t *msg, uint8_t *buf)
 
 uint8_t real_dash_parse_44(twai_message_t *msg, uint8_t *buf, uint32_t len)
 {
-	uint8_t i;
-	uint32_t crc = 0;
-
 	memset(msg->data, 0, 8);
 	if((buf[0] == 0x44) && (buf[1] == 0x33) && (buf[2] == 0x22) && (buf[3] == 0x11))
 	{
@@ -167,7 +164,7 @@ uint8_t real_dash_parse_44(twai_message_t *msg, uint8_t *buf, uint32_t len)
 			{
 				msg->extd = 1;
 			}
-			for(i = 0; i < (len-9); i++)
+			for(int i = 0; i < (len-9); i++)
 			{
 				msg->data[i] = buf[i+8];
 			}

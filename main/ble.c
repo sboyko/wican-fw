@@ -834,7 +834,9 @@ void ble_send(uint8_t* buf, uint8_t buf_len)
 		if (result != ESP_OK) {
 			ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
 		} else {
+#ifndef NDEBUG
 			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
+#endif
 		}
 	//}
 }

@@ -73,7 +73,7 @@ static can_cfg_t can_cfg;
 	.mode = op_mode, .tx_io = tx_io_num, .rx_io = rx_io_num,        \
 	.clkout_io = TWAI_IO_UNUSED, .bus_off_io = TWAI_IO_UNUSED,      \
 	.tx_queue_len = TX_QUEUE_LENGTH, .rx_queue_len = RX_QUEUE_LENGTH,                          \
-	.alerts_enabled = TWAI_ALERT_NONE,  .clkout_divider = 0,        \
+	.alerts_enabled = TWAI_ALERT_TX_SUCCESS,  .clkout_divider = 0,        \
 	.intr_flags = ESP_INTR_FLAG_LEVEL1}
 
 static const twai_general_config_t g_config_normal = TWAI_GENERAL_CONFIG_DEFAULT_V2xx(0, TX_GPIO_NUM, RX_GPIO_NUM, TWAI_MODE_NORMAL);
@@ -343,39 +343,30 @@ esp_err_t can_send(twai_message_t *message, TickType_t ticks_to_wait)
 
 	if(uxBits & CAN_ENABLE_BIT)
 	{
-		return twai_transmit(message, ticks_to_wait);
+		//return twai_transmit(message, ticks_to_wait);
 
-		/*
+		///*
 		esp_err_t result = twai_transmit(message, ticks_to_wait);
 		if (result != ESP_OK) {
 			return result;
 		}
 
 		uint32_t alerts = 0;
-		while (true) {
-			alerts = 0;
-			result = twai_read_alerts(&alerts, ticks_to_wait * 2);
-			
-			if (result == ESP_ERR_TIMEOUT) {
-				if (twai_clear_transmit_queue() != ESP_OK) {
-					ESP_LOGE(TAG, "twai_clear_transmit_queue() fails");
-				}
-				ESP_LOGW(TAG, "repeat twai_transmit()");
-				return twai_transmit(message, ticks_to_wait);
-			}
 
-			if (result != ESP_OK) {
-				ESP_LOGE(TAG, "twai_read_alerts() fails: %d", result);
-				return result;
-			}
-			if (alerts & TWAI_ALERT_TX_SUCCESS) {
-				return ESP_OK;
-			} else {
-				ESP_LOGE(TAG, "unknown alerts: %u", (unsigned int)alerts);
-				return result;
-			}
+		result = twai_read_alerts(&alerts, 30);
+		if (result == ESP_ERR_TIMEOUT) {
+			return result;
 		}
-		*/
+		if (result != ESP_OK) {
+			ESP_LOGE(TAG, "twai_read_alerts() fails: 0x%04X", result);
+			return result;
+		}
+
+		if ((alerts & TWAI_ALERT_TX_SUCCESS) != TWAI_ALERT_TX_SUCCESS) {
+			ESP_LOGE(TAG, "unexpected alerts: 0x%04X", (unsigned int)alerts);
+		}
+		return result;
+		//*/
 
 	}
 	else return ESP_ERR_INVALID_STATE;
