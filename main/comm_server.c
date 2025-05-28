@@ -55,13 +55,12 @@ static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static SemaphoreHandle_t xTCP_Socket_Semaphore;
 static uint8_t conn_led = 0;
 
-uint8_t udp_enable = 0;
+static uint8_t udp_enable = 0;
 
 static void tcp_server_rx_task(void *pvParameters)
 {
 //	int addr_family = (int)pvParameters;
-//    int len;
-    static xdev_buffer rx_buffer;
+    xdev_buffer rx_buffer;
 
 wait_skt_rx:
 	xEventGroupWaitBits(
@@ -73,7 +72,7 @@ wait_skt_rx:
 	while(1)
 	{
 		rx_buffer.usLen = recv(sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement), 0);
-        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) == pdTRUE )
+        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
         {
         	//check if sock still connected?
 			if (rx_buffer.usLen < 0)
@@ -125,7 +124,7 @@ wait_skt_rx:
 	while(1)
 	{
 		rx_buffer.usLen = recvfrom(listen_sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement), 0, (struct sockaddr *)&source_addr, &socklen);
-        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) == pdTRUE )
+        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
         {
         	//check if sock still connected?
 			if (rx_buffer.usLen < 0)
@@ -154,7 +153,7 @@ wait_skt_rx:
 static void udp_server_tx_task(void *pvParameters)
 {
 //	int addr_family = (int)pvParameters;
-	static xdev_buffer tx_buffer;
+	xdev_buffer tx_buffer;
 	struct sockaddr_in Recv_addr;
 
 	Recv_addr.sin_family       = AF_INET;
@@ -172,11 +171,11 @@ wait_skt_tx:
 	ESP_LOGI(TAG, "Socket connected...");
 	while(1)
 	{
-		xQueueReceive(*xTX_Queue, ( void * ) &tx_buffer, portMAX_DELAY);
+		xQueueReceive(*xTX_Queue, &tx_buffer, portMAX_DELAY);
 //		ESP_LOGI(TAG, "Sending %d bytes: %s", tx_buffer.usLen, tx_buffer.ucElement);
-        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) == pdTRUE )
+        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
         {
-			int err = sendto(listen_sock, tx_buffer.ucElement, tx_buffer.usLen, 0, (struct sockaddr *)&Recv_addr, sizeof(Recv_addr));
+			const int err = sendto(listen_sock, tx_buffer.ucElement, tx_buffer.usLen, 0, (struct sockaddr *)&Recv_addr, sizeof(Recv_addr));
 			if (err < 0)
 			{
 				ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
@@ -185,15 +184,15 @@ wait_skt_tx:
 				xSemaphoreGive( xTCP_Socket_Semaphore );
 				goto wait_skt_tx;
 			}
+	        xSemaphoreGive( xTCP_Socket_Semaphore );
         }
-        xSemaphoreGive( xTCP_Socket_Semaphore );
 	}
 }
 
 static void tcp_server_tx_task(void *pvParameters)
 {
 //	int addr_family = (int)pvParameters;
-	static xdev_buffer tx_buffer;
+	xdev_buffer tx_buffer;
 
 wait_skt_tx:
 	xEventGroupWaitBits(
@@ -205,14 +204,13 @@ wait_skt_tx:
 	ESP_LOGI(TAG, "Socket connected...");
 	while(1)
 	{
-		xQueuePeek(*xTX_Queue, ( void * ) &tx_buffer, portMAX_DELAY);
-
-		while(xQueuePeek(*xTX_Queue, ( void * ) &tx_buffer, 0) == pdTRUE)
+		if(xQueuePeek(*xTX_Queue, &tx_buffer, portMAX_DELAY))
 		{
-			if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) == pdTRUE )
+			if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ))
 			{
+				xQueueReceive(*xTX_Queue, &tx_buffer, 0);
+
 				int to_write = tx_buffer.usLen;
-				xQueueReceive(*xTX_Queue, ( void * ) &tx_buffer, 0);
 				while (to_write > 0)
 				{
 					int written = send(sock, tx_buffer.ucElement + (tx_buffer.usLen - to_write), to_write, 0);
@@ -226,10 +224,10 @@ wait_skt_tx:
 					}
 					to_write -= written;
 				}
+				
+				xSemaphoreGive( xTCP_Socket_Semaphore );
 			}
-			xSemaphoreGive( xTCP_Socket_Semaphore );
 		}
-		vTaskDelay(pdMS_TO_TICKS(1));
 	}
 }
 

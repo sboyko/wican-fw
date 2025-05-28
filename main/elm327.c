@@ -32,7 +32,7 @@
 
 #define TAG 		__func__
 
-static QueueHandle_t *can_rx_queue = NULL;
+static QueueHandle_t can_rx_queue;
 
 const char *ok_str = "OK";
 const char *question_mark_str = "?";
@@ -383,7 +383,7 @@ static void elm327_set_filter(uint32_t filter)
 
 	if (filter != 0xFFFFFFFF) {
 		twai_message_t rx_frame;
-		while( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 0) ) {
+		while( xQueueReceive(can_rx_queue, &rx_frame, 0) ) {
 			// cleanup before new send request
 		}
 	}
@@ -866,7 +866,7 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 
 static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)());
 
-/*__attribute__((optimize("O0")))*/ static int8_t elm327_request(char *cmd, size_t cmd_len, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
+/*__attribute__((optimize("O0")))*/ static int8_t elm327_request(char *cmd, const size_t cmd_len, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
 {
 	static int rsp_nowait_count = 0;
 	
@@ -919,7 +919,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 
 	twai_message_t rx_frame;
 	if (req_expected_rsp != 0) {
-		while( xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 0) ) {
+		while( xQueueReceive(can_rx_queue, &rx_frame, 0) ) {
 			// cleanup before new send request
 			ESP_LOGW(TAG, "skip before send %08X", (unsigned int)rx_frame.identifier&TWAI_EXTD_ID_MASK);
 		}
@@ -954,7 +954,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 	{
 		const int64_t txtime_local = esp_timer_get_time();
 
-		if (xQueueReceive(*can_rx_queue, ( void * ) &rx_frame, 5)) {
+		if (xQueueReceive(can_rx_queue, &rx_frame, 5)) {
 			totalMs += elapsedTimeMs(txtime_local);
 
 			//reset timeout after response is received
@@ -1199,16 +1199,17 @@ void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHa
 	// call will keep add to the cmd_buffer until the ending CR is found.
 	static char cmd_buffer[100];
 	static uint16_t cmd_len = 0;
-	uint8_t cmd_found_flag = 0;
 
 	for(int i = 0; i < len; i++)
 	{
-		if((buf[i] == '\r' && cmd_len > 0) || cmd_len + 2 > sizeof(cmd_buffer))
+		assert(cmd_len + 1 < sizeof(cmd_buffer));
+
+		if((buf[i] == '\r' && cmd_len > 0) || cmd_len + 1 >= sizeof(cmd_buffer))
 		{
 	//		ESP_LOGI(TAG, "end of command i: %d, cmd_len: %u", i, cmd_len);
 			cmd_buffer[cmd_len] = 0;
 			cmd_response[0] = 0;
-			cmd_found_flag = 0;
+			uint8_t cmd_found_flag = 0;
 
 			if(!strncmp(cmd_buffer, "at", 2))
 			{
@@ -1263,7 +1264,9 @@ void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHa
 			}
 			else // this is a request
 			{
-				for (uint16_t j = 0; j < cmd_len; j += CMD_LENGTH) {
+				assert((cmd_len % CMD_LENGTH) == 0);
+
+				for (uint16_t j = 0; j + CMD_LENGTH <= cmd_len; j += CMD_LENGTH) {
 					if (cmd_buffer[j] == '5' || cmd_buffer[j] == '6') {
 						cmd_buffer[j] -= 4; // normalize Abit FC-less frames
 					}
@@ -1301,11 +1304,9 @@ int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame)
 		if( elm327_can_log != NULL) {
 			elm327_can_log(frame, ELM327_CAN_RX);
 		}
-
-		if (xQueueSend(*can_rx_queue, frame, pdMS_TO_TICKS(0)) != pdTRUE) {
-			ESP_LOGE(TAG, "xQueueSend() fails , reason = 'queue full'");
-		}
-	} else if (elm327_config.monitor_all) {
+		xQueueSend(can_rx_queue, frame, portMAX_DELAY);
+	}
+	else if (elm327_config.monitor_all) {
 		char* rsp = (char*)buf;
 		int offset = elm327_print_canid(rsp, frame);
 
@@ -1330,10 +1331,10 @@ int elm327_print_canid(char *buff, twai_message_t *frame)
 	}
 }
 
-void elm327_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q), QueueHandle_t *rx_queue, void (*can_log)(twai_message_t* frame, uint8_t type))
+void elm327_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type))
 {
 	elm327_set_default_config(true);
 	elm327_response = send_to_host;
-	can_rx_queue = rx_queue;
 	elm327_can_log = can_log;
+	can_rx_queue = xQueueCreate(RX_QUEUE_LENGTH * 4, sizeof(twai_message_t));
 }

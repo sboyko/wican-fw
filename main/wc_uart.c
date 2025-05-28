@@ -38,57 +38,57 @@ static QueueHandle_t uart0_queue;
 
 static void uart_rx_task(void *arg)
 {
-//    static xdev_buffer tx_buffer;
-	static xdev_buffer rx_buffer;
+	xdev_buffer io_buffer;
     uart_event_t event;
-    // static uint8_t dtmp[128];
-    while (1)
-    {
-//    	xQueueReceive(*xuart_tx_queue, ( void * ) &tx_buffer, portMAX_DELAY);
-//    	uart_write_bytes(UART_NUM_0, tx_buffer.ucElement, tx_buffer.usLen);
-        if(xQueueReceive(uart0_queue, (void * )&event, (portTickType)portMAX_DELAY))
-        {
-            bzero(rx_buffer.ucElement, sizeof(rx_buffer.ucElement));
-//            //ESP_LOGI(TAG, "uart[%d] event:", UART_NUM_0);
-            switch(event.type)
-            {
-                //Event of UART receving data
-                /*We'd better handler data event fast, there would be much more data events than
-                other types of events. If we take too much time on data event, the queue might
-                be full.*/
-                case UART_DATA:
-//                    //ESP_LOGI(TAG, "[UART DATA]: %d", event.size);
-//                    uart_read_bytes(UART_NUM_0, dtmp, event.size, portMAX_DELAY);
-//                    //ESP_LOGI(TAG, "[DATA EVT]:");
-//                    uart_write_bytes(UART_NUM_0, (const char*) dtmp, event.size);
-						rx_buffer.usLen = uart_read_bytes(UART_NUM_0, rx_buffer.ucElement, RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
-						rx_buffer.dev_channel = DEV_UART;
-						if(rx_buffer.usLen > 0)
-						{
-							xQueueSend(*xuart_rx_queue, ( void * ) &rx_buffer, portMAX_DELAY );
-//							uart_write_bytes(UART_NUM_0, (const char*) rx_buffer.ucElement, rx_buffer.usLen);
-						}
-                    break;
 
-                //Others
-                default:
-//                    //ESP_LOGI(__func__, "uart event type: %d", event.type);
-//                		sprintf((char*)dtmp,"uart event type: %d", event.type);
-//                		uart_write_bytes(UART_NUM_0, (const char*) dtmp, strlen((char*)dtmp));
-                    break;
+    int failed_waits = 0;
+    int wait_ms = 1;
+
+    while (true) {
+     	while (xQueueReceive(*xuart_tx_queue, &io_buffer, 0)) {
+            failed_waits = 0;
+
+        	if (uart_write_bytes(UART_NUM_0, io_buffer.ucElement, io_buffer.usLen) != io_buffer.usLen) {
+                assert(false);
             }
         }
+
+        while(xQueueReceive(uart0_queue, &event, pdMS_TO_TICKS(wait_ms))) {
+            if (event.type == UART_DATA && event.size > 0) { // got new data
+                failed_waits = 0;
+
+                io_buffer.dev_channel = DEV_UART;
+                int offset = 0;
+
+                while (offset < event.size) {
+                    io_buffer.usLen = MIN(event.size - offset, sizeof(io_buffer.ucElement));
+                    if (uart_read_bytes(UART_NUM_0, io_buffer.ucElement, io_buffer.usLen, 0) != io_buffer.usLen) {
+                        assert(false);
+                        break;
+                    }
+                    xQueueSend(*xuart_rx_queue, &io_buffer, portMAX_DELAY);
+                    offset += io_buffer.usLen;
+                }
+            }
+        }
+        
+        wait_ms = (++failed_waits > 2000) ? 20 : 1;
     }
 }
 
+/*
 static void uart_tx_task(void *arg)
 {
-    static xdev_buffer tx_buffer;
+    xdev_buffer tx_buffer;
 
     while (1)
     {
-    	xQueueReceive(*xuart_tx_queue, ( void * ) &tx_buffer, portMAX_DELAY);
-    	uart_write_bytes(UART_NUM_0, tx_buffer.ucElement, tx_buffer.usLen);
+    	if (xQueueReceive(*xuart_tx_queue, &tx_buffer, portMAX_DELAY)) {
+        	if (uart_write_bytes(UART_NUM_0, tx_buffer.ucElement, tx_buffer.usLen) != tx_buffer.usLen) {
+                assert(false);
+            }
+        }
+
 //    	rx_buffer.usLen = uart_read_bytes(UART_NUM_0, rx_buffer.ucElement, RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
 //    	rx_buffer.dev_channel = DEV_UART;
 //    	if(rx_buffer.usLen > 0)
@@ -97,11 +97,12 @@ static void uart_tx_task(void *arg)
 //    	}
     }
 }
+*/
 
 void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led)
 {
     const uart_config_t uart_config = {
-        .baud_rate = 4000000,
+        .baud_rate = 2000000,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
@@ -111,15 +112,18 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t 
     xuart_tx_queue = xTXp_Queue;
 	xuart_rx_queue = xRXp_Queue;
     // We won't use a buffer for sending data.
-//    uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 2, 0, 0, NULL, 0);
-	uart_driver_install(UART_NUM_0, RX_BUF_SIZE, RX_BUF_SIZE, 20, &uart0_queue, 0);
+    //uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
+	uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 2, 0, 20, &uart0_queue, ESP_INTR_FLAG_LEVEL1);
     uart_param_config(UART_NUM_0, &uart_config);
 //																					output,			input
 //    esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int rts_io_num, int cts_io_num);
 //    uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, 2, 10);
     uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    xTaskCreate(uart_tx_task, "uart_tx_task", 1024*2, (void*)AF_INET, 5, NULL);
-    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*2, (void*)AF_INET, 5, NULL);
+
+    // Note: looks like one task is faster then two separate tasks
+    //
+    //xTaskCreate(uart_tx_task, "uart_tx_task", 1024*2, (void*)AF_INET, 5, NULL);
+    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*4, (void*)AF_INET, 5, NULL);
 }
 
 

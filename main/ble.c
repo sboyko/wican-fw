@@ -55,10 +55,10 @@ enum
     IDX_SERVICE_COMM,
     
 	IDX_CHAR_COMM_TX,
-    IDX_VALUE_COMM_TX,
+    IDX_VALUE_COMM_TX, // connects to 'xBle_RX_Queue'
 
     IDX_CHAR_COMM_RX,
-    IDX_VALUE_COMM_RX,
+    IDX_VALUE_COMM_RX, // connects to 'xBle_TX_Queue'
     //IDX_CHAR_DESC_COMM_RX,
 
     IDX_CHAR_BLE_STATUS,
@@ -92,7 +92,7 @@ static uint8_t dev_name[32] = {0};
 static uint8_t manufacturer[]="MeatPi";
 
 static uint16_t profile_handle_table[HRS_IDX_NB];
-TaskHandle_t xble_handle = NULL;
+static TaskHandle_t xble_handle = NULL;
 //static uint8_t *ext_adv_raw_data;
 //static uint8_t ext_adv_raw_data[64] = {
 //        0x02, 0x01, 0x06,
@@ -681,15 +681,12 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 }
 
 
-
 static void ble_task(void *pvParameters)
 {
-	static xdev_buffer tx_buffer;
-	static uint8_t ble_send_buf[BLE_ATT_DATA_MAX_SIZE];
-	static uint32_t ble_send_buf_len = 0;
-	static uint32_t num_msg = 0;
-	static int64_t time_old = 0;
-//	static int64_t send_time = 0;
+	xdev_buffer tx_buffer;
+	uint8_t ble_send_buf[BLE_ATT_DATA_MAX_SIZE];
+	uint32_t ble_send_buf_len = 0;
+
 	while(1)
 	{
 		//		ESP_LOGI(GATTS_TABLE_TAG, "wait BLE_CONNECTED_BIT");
@@ -710,17 +707,15 @@ static void ble_task(void *pvParameters)
 									portMAX_DELAY);
 
 
-
-				while(!ble_tx_ready())
-				{
+				while(!ble_tx_ready()) {
 					vTaskDelay(pdMS_TO_TICKS(1));
 				}
+
 				int free_packet = esp_ble_get_cur_sendable_packets_num(spp_conn_id);
-//				int free_packet = esp_ble_get_sendable_packets_num();
 
 				if(free_packet && !(BLE_CONGEST_BIT & xEventGroupGetBits(s_ble_event_group)))
 				{
-					while((xQueuePeek(*xBle_TX_Queue, ( void * ) &tx_buffer, 0) == pdTRUE))
+					while(xQueuePeek(*xBle_TX_Queue, &tx_buffer, 0))
 					{
 						// figure out how many packets are needed to send this tx_buffer
 						int num_req_packets = ((ble_send_buf_len + tx_buffer.usLen) / ble_max_data_size);
@@ -729,21 +724,13 @@ static void ble_task(void *pvParameters)
 							num_req_packets++;
 						}
 
-						if(free_packet < num_req_packets)
-						{
+						if(free_packet < num_req_packets) {
 							// We don't have enough free_packets to send this item
 							break;
 						}
 
-						xQueueReceive(*xBle_TX_Queue, ( void * ) &tx_buffer, 0);
-						num_msg++;
-						if(esp_timer_get_time() - time_old > 1000*1000)
-						{
-							time_old = esp_timer_get_time();
+						xQueueReceive(*xBle_TX_Queue, &tx_buffer, 0);
 
-		//					ESP_LOGI(GATTS_TABLE_TAG, "msg %u/sec", num_msg);
-							num_msg = 0;
-						}
 						int tx_buffer_copied = 0;
 						while(tx_buffer_copied < tx_buffer.usLen)
 						{
@@ -814,15 +801,10 @@ bool ble_connected(void)
 	else return 0;
 }
 
-bool ble_tx_ready(void)
+bool ble_tx_ready()
 {
-	if(ble_connected())
-	{
-		if(esp_ble_get_cur_sendable_packets_num(spp_conn_id) > 0)
-		{
-			return true;
-		}
-		else return false;
+	if(ble_connected()) {
+		return esp_ble_get_cur_sendable_packets_num(spp_conn_id) > 0;
 	}
 	return false;
 }
@@ -955,7 +937,7 @@ void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t conn
 
 	if(xble_handle == NULL)
 	{
-		xTaskCreate(ble_task, "ble_task", 4096, (void*)AF_INET, 5, &xble_handle);
+		xTaskCreate(ble_task, "ble_task", 1024*4, (void*)AF_INET, 5, &xble_handle);
 	}
 
 //    esp_log_level_set(GATTS_TABLE_TAG, ESP_LOG_NONE);

@@ -64,11 +64,10 @@
 #define BLE_EN_PIN_SEL		(1ULL<<BLE_EN_PIN_NUM)
 #define BLE_Enabled()		(!gpio_get_level(BLE_EN_PIN_NUM))
 
-static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_obd_rx_queue, xmsg_mqtt_rx_queue;
-static xdev_buffer ucTCP_RX_Buffer;
-static xdev_buffer ucTCP_TX_Buffer;
+static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_mqtt_rx_queue;
 
 static uint8_t protocol = SLCAN;
+static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(10);
 
 uint8_t project_hardware_rev;
 int FTP_TASK_FINISH_BIT = BIT2;
@@ -97,7 +96,7 @@ static void log_can_to_mqtt(twai_message_t *frame, uint8_t type)
 	mqtt_msg.frame.data[7] = frame->data[7];
 
 	mqtt_msg.type = type;
-	xQueueSend( xmsg_mqtt_rx_queue, ( void * ) &mqtt_msg, pdMS_TO_TICKS(0) );
+	xQueueSend( xmsg_mqtt_rx_queue, &mqtt_msg, RESPONSE_TICKS );
 }
 
 static void elm327_log_can(twai_message_t *frame, uint8_t type)
@@ -161,7 +160,10 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 	while (offset < totalLength) {
 		xsend_buffer.usLen = MIN(totalLength - offset, sizeof(xsend_buffer.ucElement));
 		memcpy(xsend_buffer.ucElement, str + offset, xsend_buffer.usLen);
-		xQueueSend( *q, &xsend_buffer, portMAX_DELAY );
+		if (xQueueSend( *q, &xsend_buffer, RESPONSE_TICKS ) != pdTRUE) {
+			assert(false);
+			break;
+		}
 		offset += xsend_buffer.usLen;
 	
 #ifndef NDEBUG
@@ -177,13 +179,16 @@ bool fnHasNewData()
 
 static void host_rx_task(void *pvParameters)
 {
+	xdev_buffer ucTCP_RX_Buffer;
+	QueueHandle_t* txQueue = &xMsg_Tx_Queue;
+
 	while(1)
 	{
 		const uint8_t perm_delay = (protocol == OBD_ELM327 ? elm327_perm_delay() : 0);
 
 		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
 			if(perm_delay > 0) {
-				elm327_process_perm_cmd(&xMsg_Tx_Queue, fnHasNewData);
+				elm327_process_perm_cmd(txQueue, fnHasNewData);
 			}
 			continue;
 		}
@@ -242,11 +247,18 @@ static void host_rx_task(void *pvParameters)
 		{
 			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
 			{
-				elm327_process_cmd(msg_ptr, temp_len, &xMsg_Tx_Queue, fnHasNewData);
+				txQueue = &xMsg_Tx_Queue;
+				elm327_process_cmd(msg_ptr, temp_len, txQueue, fnHasNewData);
 			}
 			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
 			{
-				elm327_process_cmd(msg_ptr, temp_len, &xmsg_ble_tx_queue, fnHasNewData);
+				txQueue = &xmsg_ble_tx_queue;
+				elm327_process_cmd(msg_ptr, temp_len, txQueue, fnHasNewData);
+			}
+			else if(ucTCP_RX_Buffer.dev_channel == DEV_UART)
+			{
+				txQueue = &xmsg_uart_tx_queue;
+				elm327_process_cmd(msg_ptr, temp_len, txQueue, fnHasNewData);
 			}
 		}
 	}
@@ -254,7 +266,8 @@ static void host_rx_task(void *pvParameters)
 
 static void can_rx_task(void *pvParameters)
 {
-    static twai_message_t rx_msg;
+	xdev_buffer ucTCP_TX_Buffer;
+    twai_message_t rx_msg;
 
 	while(1)
 	{
@@ -271,9 +284,9 @@ static void can_rx_task(void *pvParameters)
         	if(config_server_ws_connected())
         	{
         		ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-				if(config_server_ws_connected())
+				if(ucTCP_TX_Buffer.usLen > 0)
 				{
-					xQueueSend( xmsg_ws_tx_queue, ( void * ) &ucTCP_TX_Buffer, pdMS_TO_TICKS(0) );
+					xQueueSend( xmsg_ws_tx_queue, &ucTCP_TX_Buffer, RESPONSE_TICKS );
 				}
         	}
         	//TODO: optimize, useless ifs
@@ -300,21 +313,27 @@ static void can_rx_task(void *pvParameters)
 				}
 
 
-				if(ucTCP_TX_Buffer.usLen != 0)
+				if(ucTCP_TX_Buffer.usLen > 0)
 				{
 					if(tcp_port_open())
 					{
-						xQueueSend( xMsg_Tx_Queue, ( void * ) &ucTCP_TX_Buffer, pdMS_TO_TICKS(0) );
+						if (xQueueSend( xMsg_Tx_Queue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
+							assert(false);
+						}
 					}
 					if(ble_connected())
 					{
-						xQueueSend( xmsg_ble_tx_queue, ( void * ) &ucTCP_TX_Buffer, pdMS_TO_TICKS(0) );
+						if (xQueueSend( xmsg_ble_tx_queue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
+							assert(false);
+						}
 					}
 					else if(project_hardware_rev == WICAN_USB_V100)
 					{
 						if(!config_server_mqtt_en_config())
 						{
-							xQueueSend( xmsg_uart_tx_queue, ( void * ) &ucTCP_TX_Buffer, pdMS_TO_TICKS(0) );
+							if (xQueueSend( xmsg_uart_tx_queue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
+								assert(false);
+							}
 						}
 					}
 				}
@@ -343,7 +362,7 @@ static void can_rx_task(void *pvParameters)
 					mqtt_rx_msg.frame.data[7] = rx_msg.data[7];
 
 					mqtt_rx_msg.type = MQTT_CAN;
-					xQueueSend( xmsg_mqtt_rx_queue, ( void * ) &mqtt_rx_msg, pdMS_TO_TICKS(0) );
+					xQueueSend( xmsg_mqtt_rx_queue, &mqtt_rx_msg, RESPONSE_TICKS );
 				}
 			}
         }
@@ -385,7 +404,6 @@ void app_main(void)
     xmsg_ws_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) );
 
 	esp_ota_mark_app_valid_cancel_rollback();
-//    xmsg_obd_rx_queue = xQueueCreate(100, sizeof( twai_message_t) );
 
     ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
     sprintf((char *)ble_uid,"WiC_%02x%02x%02x%02x%02x%02x",
@@ -452,15 +470,14 @@ void app_main(void)
 //		can_init(CAN_500K);
 		can_set_bitrate(can_datarate);
 		can_enable();
-		xmsg_obd_rx_queue = xQueueCreate(128, sizeof( twai_message_t) );
 		if(config_server_mqtt_en_config() && config_server_mqtt_elm327_log())
 		{
 			mqtt_elm327_log_en = config_server_mqtt_elm327_log();
-			elm327_init(&host_tx_task, &xmsg_obd_rx_queue, log_can_to_mqtt);
+			elm327_init(&host_tx_task, log_can_to_mqtt);
 		}
 		else
 		{
-			elm327_init(&host_tx_task, &xmsg_obd_rx_queue, elm327_log_can);
+			elm327_init(&host_tx_task, elm327_log_can);
 		}
 	}
 
@@ -576,5 +593,5 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_WARN);
+	esp_log_level_set("*", ESP_LOG_NONE);
 }
