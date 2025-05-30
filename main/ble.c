@@ -20,7 +20,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include  "freertos/queue.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_timer.h"
 #include "esp_bt.h"
@@ -35,14 +35,12 @@
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include <string.h>
 #include "lwip/sockets.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "esp_log.h"
 #include "esp_gatt_common_api.h"
 #include "types.h"
 #include "ble.h"
@@ -374,6 +372,28 @@ static void logBtDeviceAddress(const char* logPrefix, const esp_bd_addr_t bd_add
 		(bd_addr[4] << 8) + bd_addr[5]);
 }
 
+static bool ble_tx_ready()
+{
+	if(ble_connected()) {
+		return esp_ble_get_cur_sendable_packets_num(spp_conn_id) > 0;
+	}
+	return false;
+}
+static void ble_send(uint8_t* buf, uint8_t buf_len, int charactValueIndex)
+{
+	//if(ble_tx_ready())
+	//{
+		const esp_err_t result = esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, profile_handle_table[charactValueIndex], buf_len, buf, false);
+		if (result != ESP_OK) {
+			ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
+		} else {
+#ifndef NDEBUG
+			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
+#endif
+		}
+	//}
+}
+
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     ESP_LOGI(GATTS_TABLE_TAG, "GAP_EVT, event %d", event);
@@ -537,6 +557,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             	if(param->write.len == 1 && (param->write.value[0] == 0 || param->write.value[0] == 1))
             	{
             		config_server_set_ble_config(param->write.value[0]);
+					ble_send(param->write.value, 1, IDX_VALUE_BLE_STATUS); // simple reply
             	}
             }
             break;
@@ -753,7 +774,7 @@ static void ble_task(void *pvParameters)
 			//										portMAX_DELAY);
 			//					ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, ble_send_buf, ble_send_buf_len, ESP_LOG_INFO);
 			
-								ble_send(ble_send_buf, ble_send_buf_len);
+								ble_send(ble_send_buf, ble_send_buf_len, IDX_VALUE_COMM_RX);
 								ble_send_buf_len = 0;
 								if(--free_packet == 0 && tx_buffer_remaining > 0)
 								{
@@ -769,7 +790,7 @@ static void ble_task(void *pvParameters)
 					if(free_packet != 0 && ble_send_buf_len != 0)
 					{
 			//			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, ble_send_buf, ble_send_buf_len, ESP_LOG_INFO);
-						ble_send(ble_send_buf, ble_send_buf_len);
+						ble_send(ble_send_buf, ble_send_buf_len, IDX_VALUE_COMM_RX);
 						ble_send_buf_len = 0;
 					}
 				}
@@ -784,7 +805,7 @@ static void ble_task(void *pvParameters)
 		//							pdFALSE,
 		//							pdFALSE,
 		//							portMAX_DELAY);
-		//		ble_send(ble_send_buf, ble_send_buf_len);
+		//		ble_send(ble_send_buf, ble_send_buf_len, IDX_VALUE_COMM_RX);
 		//		ESP_LOGI(GATTS_TABLE_TAG, "esp_ble_get_cur_sendable_packets_num 2: %d", esp_ble_get_cur_sendable_packets_num(spp_conn_id));
 	}
 }
@@ -801,27 +822,6 @@ bool ble_connected(void)
 	else return 0;
 }
 
-bool ble_tx_ready()
-{
-	if(ble_connected()) {
-		return esp_ble_get_cur_sendable_packets_num(spp_conn_id) > 0;
-	}
-	return false;
-}
-void ble_send(uint8_t* buf, uint8_t buf_len)
-{
-	//if(ble_tx_ready())
-	//{
-		const esp_err_t result = esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, profile_handle_table[IDX_VALUE_COMM_RX], buf_len, buf, false);
-		if (result != ESP_OK) {
-			ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
-		} else {
-#ifndef NDEBUG
-			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
-#endif
-		}
-	//}
-}
 static uint32_t ble_pass_key = 0;
 void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, int passkey, uint8_t* uid)
 {
