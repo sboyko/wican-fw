@@ -61,6 +61,7 @@ static void tcp_server_rx_task(void *pvParameters)
 {
 //	int addr_family = (int)pvParameters;
     xdev_buffer rx_buffer;
+	rx_buffer.dev_channel = DEV_WIFI;
 
 wait_skt_rx:
 	xEventGroupWaitBits(
@@ -72,7 +73,7 @@ wait_skt_rx:
 	while(1)
 	{
 		rx_buffer.usLen = recv(sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement), 0);
-        if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
+        //if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
         {
         	//check if sock still connected?
 			if (rx_buffer.usLen < 0)
@@ -80,7 +81,7 @@ wait_skt_rx:
 				xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 				xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 				ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
-				xSemaphoreGive( xTCP_Socket_Semaphore );
+				//xSemaphoreGive( xTCP_Socket_Semaphore );
 				goto wait_skt_rx;
 
 			} else if (rx_buffer.usLen == 0)
@@ -88,18 +89,15 @@ wait_skt_rx:
 				xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 				xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 				ESP_LOGW(TAG, "Connection closed");
-				xSemaphoreGive( xTCP_Socket_Semaphore );
+				//xSemaphoreGive( xTCP_Socket_Semaphore );
 				goto wait_skt_rx;
 			}
 			else
 			{
-				rx_buffer.dev_channel = DEV_WIFI;
-				//rx_buffer.ucElement[rx_buffer.usLen] = 0; // Null-terminate whatever is received and treat it like a string
-//				ESP_LOGI(TAG, "Received %d bytes: %s", rx_buffer.usLen, rx_buffer.ucElement);
 		        //TODO: what happens if blocked for ever?
 				xQueueSend( *xRX_Queue, &rx_buffer, portMAX_DELAY );
 			}
-			xSemaphoreGive( xTCP_Socket_Semaphore );
+			//xSemaphoreGive( xTCP_Socket_Semaphore );
         }
 
 	}
@@ -109,7 +107,7 @@ static void udp_server_rx_task(void *pvParameters)
 {
 //	int addr_family = (int)pvParameters;
 //    int len;
-    static xdev_buffer rx_buffer;
+    xdev_buffer rx_buffer;
 
 wait_skt_rx:
 	xEventGroupWaitBits(
@@ -204,11 +202,11 @@ wait_skt_tx:
 	ESP_LOGI(TAG, "Socket connected...");
 	while(1)
 	{
-		if(xQueuePeek(*xTX_Queue, &tx_buffer, portMAX_DELAY))
+		if(xQueueReceive(*xTX_Queue, &tx_buffer, portMAX_DELAY))
 		{
-			if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ))
+			//if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ))
 			{
-				xQueueReceive(*xTX_Queue, &tx_buffer, 0);
+				//xQueueReceive(*xTX_Queue, &tx_buffer, 0);
 
 				int to_write = tx_buffer.usLen;
 				while (to_write > 0)
@@ -219,13 +217,13 @@ wait_skt_tx:
 						ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
 						xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 						xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
-						xSemaphoreGive( xTCP_Socket_Semaphore );
+						//xSemaphoreGive( xTCP_Socket_Semaphore );
 						goto wait_skt_tx;
 					}
 					to_write -= written;
 				}
 				
-				xSemaphoreGive( xTCP_Socket_Semaphore );
+				//xSemaphoreGive( xTCP_Socket_Semaphore );
 			}
 		}
 	}
