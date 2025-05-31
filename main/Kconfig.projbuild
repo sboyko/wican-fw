@@ -15,4 +15,4 @@ endmenu
 
 config ESP_CONSOLE_UART_BAUDRATE
     int
-    default 4000000
+    default 2000000

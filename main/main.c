@@ -65,6 +65,8 @@
 #define BLE_Enabled()		(!gpio_get_level(BLE_EN_PIN_NUM))
 
 static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_mqtt_rx_queue;
+static QueueHandle_t* host_txQueue = NULL;
+static int host_tx_failed_waits = 0;
 
 static uint8_t protocol = SLCAN;
 static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(10);
@@ -180,18 +182,23 @@ bool fnHasNewData()
 static void host_rx_task(void *pvParameters)
 {
 	xdev_buffer ucTCP_RX_Buffer;
-	QueueHandle_t* txQueue = &xMsg_Tx_Queue;
 
 	while(1)
 	{
 		const uint8_t perm_delay = (protocol == OBD_ELM327 ? elm327_perm_delay() : 0);
 
 		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
-			if(perm_delay > 0) {
-				elm327_process_perm_cmd(txQueue, fnHasNewData);
+			if(perm_delay > 0 && host_txQueue) {
+				elm327_process_perm_cmd(host_txQueue, fnHasNewData);
+				host_tx_failed_waits = 0;
+			} else {
+				if (++host_tx_failed_waits > 400) {
+					host_txQueue = NULL;
+				}
 			}
 			continue;
 		}
+		host_tx_failed_waits = 0;
 
 #ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
@@ -200,38 +207,34 @@ static void host_rx_task(void *pvParameters)
 		uint8_t* msg_ptr = ucTCP_RX_Buffer.ucElement;
 		int temp_len = ucTCP_RX_Buffer.usLen;
 
-		if(config_server_ws_connected())
+		if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI) {
+			host_txQueue = &xMsg_Tx_Queue;
+		} else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE) {
+			host_txQueue = &xmsg_ble_tx_queue;
+		} else if(ucTCP_RX_Buffer.dev_channel == DEV_UART) {
+			host_txQueue = &xmsg_uart_tx_queue;
+		} else { // if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS) {
+			host_txQueue = &xmsg_ws_tx_queue;
+		}
+
+		if(protocol == OBD_ELM327)
 		{
-			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS)
-			{
+			if (ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS && config_server_ws_connected()) {
 				twai_message_t tx_msg;
-				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xmsg_ws_tx_queue);
+				slcan_parse_str(msg_ptr, temp_len, &tx_msg, host_txQueue);
+			} else {
+				elm327_process_cmd(msg_ptr, temp_len, host_txQueue, fnHasNewData);
 			}
 		}
-		if(protocol == SLCAN)
+		else if(protocol == SLCAN)
 		{
 			twai_message_t tx_msg;
-			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
-			{
-				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
-			}
-			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
-			{
-				slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xmsg_ble_tx_queue);
-			}
-			else if(ucTCP_RX_Buffer.dev_channel == DEV_UART)
-			{
-				if(!config_server_mqtt_en_config())
-				{
-					slcan_parse_str(msg_ptr, temp_len, &tx_msg, &xmsg_uart_tx_queue);
-				}
-			}
+			slcan_parse_str(msg_ptr, temp_len, &tx_msg, host_txQueue);
 		}
 		else if(protocol == REALDASH)
 		{
 			twai_message_t tx_msg;
-			if(real_dash_parse_66(&tx_msg, msg_ptr) == 0)
-			{
+			if(real_dash_parse_66(&tx_msg, msg_ptr) == 0) {
 				real_dash_parse_44(&tx_msg, msg_ptr, temp_len);
 			}
 
@@ -243,24 +246,6 @@ static void host_rx_task(void *pvParameters)
 			twai_message_t tx_msg;
 			gvret_parse(msg_ptr, temp_len, &tx_msg, &xMsg_Tx_Queue);
 		}
-		else if(protocol == OBD_ELM327)
-		{
-			if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI)
-			{
-				txQueue = &xMsg_Tx_Queue;
-				elm327_process_cmd(msg_ptr, temp_len, txQueue, fnHasNewData);
-			}
-			else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE)
-			{
-				txQueue = &xmsg_ble_tx_queue;
-				elm327_process_cmd(msg_ptr, temp_len, txQueue, fnHasNewData);
-			}
-			else if(ucTCP_RX_Buffer.dev_channel == DEV_UART)
-			{
-				txQueue = &xmsg_uart_tx_queue;
-				elm327_process_cmd(msg_ptr, temp_len, txQueue, fnHasNewData);
-			}
-		}
 	}
 }
 
@@ -268,10 +253,11 @@ static void can_rx_task(void *pvParameters)
 {
 	xdev_buffer ucTCP_TX_Buffer;
     twai_message_t rx_msg;
+	mqtt_can_message_t mqtt_rx_msg;
 
 	while(1)
 	{
-        if(can_receive(&rx_msg, pdMS_TO_TICKS(2)) ==  ESP_OK)
+        if(can_receive(&rx_msg, pdMS_TO_TICKS(2)) == ESP_OK)
         {
 			// ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
 			// 	(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
@@ -281,21 +267,21 @@ static void can_rx_task(void *pvParameters)
 
         	process_led(1);
 
-        	if(config_server_ws_connected())
-        	{
-        		ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-				if(ucTCP_TX_Buffer.usLen > 0)
-				{
-					xQueueSend( xmsg_ws_tx_queue, &ucTCP_TX_Buffer, RESPONSE_TICKS );
-				}
-        	}
-        	//TODO: optimize, useless ifs
-			if(tcp_port_open() || ble_connected() || project_hardware_rev == WICAN_USB_V100 || mqtt_connected())
+			QueueHandle_t* const txQueue = host_txQueue;
+			if(txQueue)
 			{
 				ucTCP_TX_Buffer.ucElement[0] = 0;
 				ucTCP_TX_Buffer.usLen = 0;
 
-				if(protocol == SLCAN)
+				if(protocol == OBD_ELM327)
+				{
+					if (txQueue == &xmsg_ws_tx_queue && config_server_ws_connected()) {
+						ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
+					} else {
+						ucTCP_TX_Buffer.usLen = elm327_process_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
+					}
+				}
+				else if(protocol == SLCAN)
 				{
 					ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 				}
@@ -307,63 +293,38 @@ static void can_rx_task(void *pvParameters)
 				{
 					ucTCP_TX_Buffer.usLen = gvret_parse_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 				}
-				else if(protocol == OBD_ELM327)
-				{
-					ucTCP_TX_Buffer.usLen = elm327_process_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-				}
 
 
 				if(ucTCP_TX_Buffer.usLen > 0)
 				{
-					if(tcp_port_open())
-					{
-						if (xQueueSend( xMsg_Tx_Queue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
-							assert(false);
-						}
-					}
-					if(ble_connected())
-					{
-						if (xQueueSend( xmsg_ble_tx_queue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
-							assert(false);
-						}
-					}
-					else if(project_hardware_rev == WICAN_USB_V100)
-					{
-						if(!config_server_mqtt_en_config())
-						{
-							if (xQueueSend( xmsg_uart_tx_queue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
-								assert(false);
-							}
-						}
+					host_tx_failed_waits = 0;
+					if (xQueueSend( *txQueue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
+						assert(false);
 					}
 				}
 			}
 
-			if(mqtt_connected())
+			if(mqtt_connected() && mqtt_elm327_log_en == 0)
 			{
-				static mqtt_can_message_t mqtt_rx_msg;
-				if(mqtt_elm327_log_en == 0)
-				{
-					mqtt_rx_msg.frame.extd = rx_msg.extd;
-					mqtt_rx_msg.frame.rtr = rx_msg.rtr;
-					mqtt_rx_msg.frame.ss = rx_msg.ss;
-					mqtt_rx_msg.frame.self = rx_msg.self;
-					mqtt_rx_msg.frame.dlc_non_comp = rx_msg.dlc_non_comp;
-					mqtt_rx_msg.frame.identifier = rx_msg.identifier;
-					mqtt_rx_msg.frame.data_length_code = rx_msg.data_length_code;
+				mqtt_rx_msg.frame.extd = rx_msg.extd;
+				mqtt_rx_msg.frame.rtr = rx_msg.rtr;
+				mqtt_rx_msg.frame.ss = rx_msg.ss;
+				mqtt_rx_msg.frame.self = rx_msg.self;
+				mqtt_rx_msg.frame.dlc_non_comp = rx_msg.dlc_non_comp;
+				mqtt_rx_msg.frame.identifier = rx_msg.identifier;
+				mqtt_rx_msg.frame.data_length_code = rx_msg.data_length_code;
 
-					mqtt_rx_msg.frame.data[0] = rx_msg.data[0];
-					mqtt_rx_msg.frame.data[1] = rx_msg.data[1];
-					mqtt_rx_msg.frame.data[2] = rx_msg.data[2];
-					mqtt_rx_msg.frame.data[3] = rx_msg.data[3];
-					mqtt_rx_msg.frame.data[4] = rx_msg.data[4];
-					mqtt_rx_msg.frame.data[5] = rx_msg.data[5];
-					mqtt_rx_msg.frame.data[6] = rx_msg.data[6];
-					mqtt_rx_msg.frame.data[7] = rx_msg.data[7];
+				mqtt_rx_msg.frame.data[0] = rx_msg.data[0];
+				mqtt_rx_msg.frame.data[1] = rx_msg.data[1];
+				mqtt_rx_msg.frame.data[2] = rx_msg.data[2];
+				mqtt_rx_msg.frame.data[3] = rx_msg.data[3];
+				mqtt_rx_msg.frame.data[4] = rx_msg.data[4];
+				mqtt_rx_msg.frame.data[5] = rx_msg.data[5];
+				mqtt_rx_msg.frame.data[6] = rx_msg.data[6];
+				mqtt_rx_msg.frame.data[7] = rx_msg.data[7];
 
-					mqtt_rx_msg.type = MQTT_CAN;
-					xQueueSend( xmsg_mqtt_rx_queue, &mqtt_rx_msg, RESPONSE_TICKS );
-				}
+				mqtt_rx_msg.type = MQTT_CAN;
+				xQueueSend( xmsg_mqtt_rx_queue, &mqtt_rx_msg, RESPONSE_TICKS );
 			}
         }
 		else
@@ -490,7 +451,7 @@ void app_main(void)
 	}
 //	else if(protocol == MQTT)
 //	{
-//		xmsg_mqtt_rx_queue = xQueueCreate(100, sizeof( twai_message_t) );
+//		xmsg_mqtt_rx_queue = xQueueCreate(32, sizeof( twai_message_t) );
 //		can_init(CAN_500K);
 //		can_enable();
 //
@@ -517,7 +478,7 @@ void app_main(void)
     if(config_server_get_ble_config())
     {
     	int pass = config_server_ble_pass();
-    	xmsg_ble_tx_queue = xQueueCreate(100, sizeof( xdev_buffer) );
+    	xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
     	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, pass, &ble_uid[0]);
     }
 
@@ -534,12 +495,9 @@ void app_main(void)
         {
         	project_hardware_rev = WICAN_USB_V100;
         	ESP_LOGI(TAG, "project_hardware_rev: USB");
-        	if(!config_server_mqtt_en_config())
-        	{
-        	    xmsg_uart_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) );
-        		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM);
-        	}
 
+			xmsg_uart_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
+       		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM);
         }
         else
         {
