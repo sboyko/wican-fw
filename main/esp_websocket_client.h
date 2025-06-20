@@ -23,6 +23,7 @@
 #include "esp_err.h"
 #include "esp_event.h"
 #include <sys/socket.h>
+#include "esp_transport_ws.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,7 +52,7 @@ typedef enum {
 typedef struct {
     const char *data_ptr;                   /*!< Data pointer */
     int data_len;                           /*!< Data length */
-    uint8_t op_code;                        /*!< Received opcode */
+    ws_transport_opcodes_t op_code;         /*!< Received opcode */
     esp_websocket_client_handle_t client;   /*!< esp_websocket_client_handle_t context */
     void *user_context;                     /*!< user_data context, from esp_websocket_client_config_t user_data */
     int payload_len;                        /*!< Total payload length, payloads exceeding buffer will be posted through multiple events */
@@ -271,6 +272,8 @@ esp_err_t esp_websocket_register_events(esp_websocket_client_handle_t client,
                                         esp_websocket_event_id_t event,
                                         esp_event_handler_t event_handler,
                                         void *event_handler_arg);
+
+uint64_t _tick_get_ms();
 
 #ifdef __cplusplus
 }

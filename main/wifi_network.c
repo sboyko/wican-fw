@@ -70,7 +70,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
     	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_STA_DISCONNECTED");
-//    	config_server_wifi_connected(0);
+    	config_server_wifi_connected(0);
 
     	xEventGroupSetBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
     	xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECT_IDLE_BIT);
@@ -89,7 +89,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         xEventGroupClearBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECT_IDLE_BIT);
-//        config_server_wifi_connected(1);
+        config_server_wifi_connected(1);
     }
 
     if (event_id == WIFI_EVENT_AP_STACONNECTED)
@@ -214,7 +214,7 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
 	{
 		channel = 6;
 	}
-	ESP_LOGE(WIFI_TAG, "AP Channel:%d", channel);
+	ESP_LOGI(WIFI_TAG, "AP Channel: %d", channel);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));

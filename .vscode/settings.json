@@ -11,7 +11,11 @@
         "can.h": "c",
         "std_pid.h": "c",
         "limits": "c",
-        "random": "cpp"
+        "random": "cpp",
+        "esp_websocket_client.h": "c",
+        "stdbool.h": "c",
+        "ecc_dsa.h": "c",
+        "*.inc": "c"
     },
     "idf.pythonInstallPath": "C:\\Users\\STK\\.espressif\\tools\\idf-python\\3.11.2\\python.exe"
 }

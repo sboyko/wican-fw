@@ -163,6 +163,7 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 		xsend_buffer.usLen = MIN(totalLength - offset, sizeof(xsend_buffer.ucElement));
 		memcpy(xsend_buffer.ucElement, str + offset, xsend_buffer.usLen);
 		if (xQueueSend( *q, &xsend_buffer, RESPONSE_TICKS ) != pdTRUE) {
+			ESP_LOGE(TAG, "xQueueSend() fails");
 			assert(false);
 			break;
 		}
@@ -299,6 +300,7 @@ static void can_rx_task(void *pvParameters)
 				{
 					host_tx_failed_waits = 0;
 					if (xQueueSend( *txQueue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
+						ESP_LOGE(TAG, "xQueueSend() fails");
 						assert(false);
 					}
 				}
@@ -459,7 +461,8 @@ void app_main(void)
 //	}
 
 
-	wifi_network_init(NULL, NULL);
+	const bool use_modem = false;
+	wifi_network_init(use_modem ? "WiCANabitabit" : NULL, use_modem ? "airabit123" : NULL);
 	int32_t port = config_server_get_port();
 
 	if(port == -1)
@@ -551,5 +554,5 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_NONE);
+	esp_log_level_set("*", ESP_LOG_WARN);
 }

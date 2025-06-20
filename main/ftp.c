@@ -47,8 +47,6 @@
 
 #include "dirent.h"
 #include "esp_system.h"
-//#include "esp_spi_flash.h" // ESP-IDF V4
-#include "esp_flash.h" // ESP-IDF V5
 #include "nvs_flash.h"
 #include "esp_log.h"
 
@@ -57,8 +55,6 @@
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
 #include "lwip/netdb.h"
-
-//#include "freertos/semphr.h"
 
 #include "ftp.h"
 

@@ -864,9 +864,9 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 	return (TickType_t)(((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
 }
 
-static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)());
+static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, bool fc_less_mode, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)());
 
-/*__attribute__((optimize("O0")))*/ static int8_t elm327_request(char *cmd, const size_t cmd_len, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
+/*__attribute__((optimize("O0")))*/ static int8_t elm327_request(char *cmd, const size_t cmd_len, bool fc_less_mode, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
 {
 	static int rsp_nowait_count = 0;
 	
@@ -937,10 +937,10 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 	}
 	rsp_nowait_count = 0;
 
-	return elm327_request_wait_answer(req_expected_rsp, &txframe, rsp, queue, fnHasNewData);
+	return elm327_request_wait_answer(req_expected_rsp, &txframe, fc_less_mode, rsp, queue, fnHasNewData);
 }
 
-static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
+static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, bool fc_less_mode, char *rsp, QueueHandle_t *queue, bool (*fnHasNewData)())
 {
 	TickType_t totalMs = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
 	const int64_t txtime = esp_timer_get_time();
@@ -963,7 +963,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 
 			// Identify what kind of frame this is.
 			int rx_frame_data_length = 0;
-			uint8_t frame_type = rx_frame.data[0] & 0xF0;
+			const uint8_t frame_type = rx_frame.data[0] & 0xF0;
 			if (frame_type == 0x10)
 			{
 				// This is a first frame
@@ -1007,6 +1007,10 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 			}
 			else if (frame_type == 0x30)
 			{
+				if (fc_less_mode) {
+					assert(req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp);
+					break;
+				}
 				// This is a flow control frame from an ECU
 				//
 				// TODO: if we start supporting sending more than 7 bytes of
@@ -1101,6 +1105,42 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 	return 0;
 }
 
+void elm327_process_perm_cmd(QueueHandle_t *q, bool (*fnHasNewData)())
+{
+	if (elm327_config.perm_cmd_count == 0) {
+		return;
+	}
+
+	if (elm327_config.perm_cmd_index >= elm327_config.perm_cmd_count) {
+		elm327_config.perm_cmd_index = 0;
+	}
+
+	const int offset = elm327_config.perm_cmd_index * CMD_LENGTH;
+	cmd_response[0] = 0;
+	elm327_request(elm327_config.perm_cmd_list + offset, CMD_LENGTH, false, cmd_response, q, fnHasNewData);
+
+	elm327_config.perm_cmd_index += 1;
+}
+
+uint8_t elm327_perm_delay()
+{
+	if (elm327_config.perm_cmd_count == 0) {
+		return 0; // means no permanent command to send
+	}
+	return MAX(elm327_config.perm_cmd_delay, 1);
+}
+
+void clear_perm_commands()
+{
+	if (elm327_config.perm_cmd_count != 0) {
+		elm327_config.perm_cmd_count = 0;
+		elm327_config.perm_cmd_index = 0;
+		elm327_config.perm_cmd_list[0] = 0;
+
+		ESP_LOGI(TAG, "clear permanent commands");
+	}
+}
+
 static char* elm327_perm_send(const char* command_str)
 {
 	if (elm327_config.perm_cmd_count >= sizeof(elm327_config.perm_cmd_list) / CMD_LENGTH) {
@@ -1118,39 +1158,13 @@ static char* elm327_perm_send(const char* command_str)
 
 static char* elm327_perm_reset(const char* command_str)
 {
-	elm327_config.perm_cmd_count = 0;
-	elm327_config.perm_cmd_index = 0;
-	elm327_config.perm_cmd_list[0] = 0;
+	clear_perm_commands();
+
 	elm327_config.perm_cmd_delay = elm327_parse_hex_str(command_str + 3, strlen(command_str + 3)); // considers length of 'prr'
 
-	ESP_LOGI(TAG, "clear permanent commands, delay = %d ms", elm327_config.perm_cmd_delay);
+	ESP_LOGI(TAG, "set permanent commands delay = %d ms", elm327_config.perm_cmd_delay);
 
 	return ""; // skip reply
-}
-
-uint8_t elm327_perm_delay()
-{
-	if (elm327_config.perm_cmd_count == 0) {
-		return 0; // means no permanent command to send
-	}
-	return MAX(elm327_config.perm_cmd_delay, 1);
-}
-
-void elm327_process_perm_cmd(QueueHandle_t *q, bool (*fnHasNewData)())
-{
-	if (elm327_config.perm_cmd_count == 0) {
-		return;
-	}
-
-	if (elm327_config.perm_cmd_index >= elm327_config.perm_cmd_count) {
-		elm327_config.perm_cmd_index = 0;
-	}
-
-	const int offset = elm327_config.perm_cmd_index * CMD_LENGTH;
-	cmd_response[0] = 0;
-	elm327_request(elm327_config.perm_cmd_list + offset, CMD_LENGTH, cmd_response, q, fnHasNewData);
-
-	elm327_config.perm_cmd_index += 1;
 }
 
 
@@ -1264,15 +1278,20 @@ void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHa
 			}
 			else // this is a request
 			{
-				assert((cmd_len % CMD_LENGTH) == 0);
+				if ((cmd_len % CMD_LENGTH) != 0) {
+					ESP_LOGE(TAG, "cmd_len fail, len = %d, data = '%s'", cmd_len, cmd_buffer);
+					assert(false);
+				}
 
 				for (uint16_t j = 0; j + CMD_LENGTH <= cmd_len; j += CMD_LENGTH) {
+					bool fc_less_mode = false;
 					if (cmd_buffer[j] == '5' || cmd_buffer[j] == '6') {
 						cmd_buffer[j] -= 4; // normalize Abit FC-less frames
+						fc_less_mode = true;
 					}
 
 					cmd_response[0] = 0;
-					elm327_request(cmd_buffer + j, CMD_LENGTH, cmd_response, q, fnHasNewData);
+					elm327_request(cmd_buffer + j, CMD_LENGTH, fc_less_mode, cmd_response, q, fnHasNewData);
 				}
 			}
 

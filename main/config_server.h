@@ -99,7 +99,7 @@ int8_t config_server_get_can_rate(void);
 int8_t config_server_get_can_mode(void);
 int8_t config_server_get_port_type(void);
 int32_t config_server_get_port(void);
-//void config_server_wifi_connected(bool flag);
+void config_server_wifi_connected(bool flag);
 //bool config_server_get_wifi_connected(void);
 void config_server_set_sta_ip(char* ip);
 void config_server_get_sta_ip(char* ip);
