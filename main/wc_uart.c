@@ -40,17 +40,42 @@ static void uart_rx_task(void *arg)
 {
 	xdev_buffer io_buffer;
     uart_event_t event;
+    char ws_data[DEV_BUFFER_LENGTH * 2];
 
     int failed_waits = 0;
     int wait_ms = 1;
 
     while (true) {
-     	while (xQueueReceive(*xuart_tx_queue, &io_buffer, 0)) {
+     	if (xQueueReceive(*xuart_tx_queue, &io_buffer, 0)) {
             failed_waits = 0;
 
-        	if (uart_write_bytes(UART_NUM_0, io_buffer.ucElement, io_buffer.usLen) != io_buffer.usLen) {
-                assert(false);
+            int offset = 0;
+            while (true) {
+                memcpy(ws_data + offset, io_buffer.ucElement, io_buffer.usLen);
+                offset += io_buffer.usLen;
+
+                if (xQueuePeek(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(0))
+                        && offset + io_buffer.usLen < sizeof(ws_data)) {
+                    if (xQueueReceive(*xuart_tx_queue, &io_buffer, 0) != pdTRUE) {
+                        //ESP_LOGE(TAG, "xQueueReceive() fails");
+                        assert(false);
+                    }
+                } else {
+                    break;
+                }
             }
+
+			int to_write = offset;
+			while (to_write > 0)
+			{
+				int written = uart_write_bytes(UART_NUM_0, ws_data + (offset - to_write), to_write);
+				if (written < 0) {
+                    //ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                    assert(false);
+                    break;
+				}
+				to_write -= written;
+			}
         }
 
         while(xQueueReceive(uart0_queue, &event, pdMS_TO_TICKS(wait_ms))) {
@@ -62,13 +87,16 @@ static void uart_rx_task(void *arg)
 
                 while (offset < event.size) {
                     io_buffer.usLen = MIN(event.size - offset, sizeof(io_buffer.ucElement));
-                    if (uart_read_bytes(UART_NUM_0, io_buffer.ucElement, io_buffer.usLen, 0) != io_buffer.usLen) {
+                    io_buffer.usLen = uart_read_bytes(UART_NUM_0, io_buffer.ucElement, io_buffer.usLen, 0);
+                    if (io_buffer.usLen < 0) {
                         assert(false);
                         break;
                     }
                     xQueueSend(*xuart_rx_queue, &io_buffer, portMAX_DELAY);
                     offset += io_buffer.usLen;
                 }
+
+                vTaskDelay(pdMS_TO_TICKS(1));
             }
         }
         
@@ -113,7 +141,7 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t 
 	xuart_rx_queue = xRXp_Queue;
     // We won't use a buffer for sending data.
     //uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
-	uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 2, 0, 20, &uart0_queue, ESP_INTR_FLAG_LEVEL1);
+	uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 4, 0, 10, &uart0_queue, ESP_INTR_FLAG_LEVEL1);
     uart_param_config(UART_NUM_0, &uart_config);
 //																					output,			input
 //    esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int rts_io_num, int cts_io_num);

@@ -364,7 +364,7 @@ void app_main(void)
 
     xMsg_Rx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
     xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
-    xmsg_ws_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) );
+    xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
 
 	esp_ota_mark_app_valid_cancel_rollback();
 

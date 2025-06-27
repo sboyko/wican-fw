@@ -73,6 +73,9 @@ typedef struct __xelm327_config
 	char perm_cmd_list[85]; // each permanent command is of CMD_LENGTH
 	uint8_t perm_cmd_delay; // delay between two consecutive permanent commands in ms
 
+	uint8_t uds_rps_skip_prefix[8]; // can't be longer then CAN frame
+	int uds_rps_skip_size;
+
 }_xelm327_config_t;
 
 
@@ -133,6 +136,8 @@ static void elm327_set_default_config(bool reset_protocol)
 	elm327_config.perm_cmd_index = 0;
 	elm327_config.perm_cmd_list[0] = 0;
 	elm327_config.perm_cmd_delay = 0;
+
+	elm327_config.uds_rps_skip_size = 0;
 }
 
 typedef char* (*elm327_command_callback)(const char* command_str);
@@ -907,8 +912,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 		// commands can't be longer than 7 bytes unless flow control is used
 		// FIXME: this should use the linefeed setting and match the number of
 		// `\r`s that are normally sent.
-		strcat(rsp, "?\r>");
-		elm327_response(rsp, 0, queue);
+		elm327_response("?\r>", 0, queue);
 		return 0;
 	}
 	else
@@ -925,7 +929,12 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 		}
 	}
 
-	can_tx_task(&txframe);
+	if (can_tx_task(&txframe) != ESP_OK) {
+		if (req_expected_rsp != 0 && req_expected_rsp != 0xFF) {
+			elm327_response("CAN ERROR\r\r>", 0, queue);
+			return 0;
+		}
+	}
 
 	if (req_expected_rsp == 0) {
 		rsp_nowait_count += 1;
@@ -1029,6 +1038,20 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 				rx_frame_data_length = rx_frame.data[0];
 			}
 
+			const bool rsp_complete = (req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp);
+
+			if (elm327_config.uds_rps_skip_size > 0
+					&& memcmp(elm327_config.uds_rps_skip_prefix, rx_frame.data, elm327_config.uds_rps_skip_size) == 0
+					) {
+				//ESP_LOGW(TAG, "skip response: %s", rsp);
+
+				if (rsp_complete) {
+					break;
+				} else {
+					continue;
+				}
+			}
+
 			uint8_t data_offset = 0;
 
 			// Based on the "CAF0 AND CAF1" section of the ELM doc, if headers are shown
@@ -1055,7 +1078,6 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 //			ESP_LOGW(TAG, "ELM327 send: %s", rsp);
 //			ESP_LOG_BUFFER_HEX(TAG, rsp, strlen(rsp));
 
-			bool rsp_complete = (req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp);
 			if (rsp_complete) {
 				strcat(rsp, ">");
 			}
@@ -1076,7 +1098,10 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 				txframe->data[1] = BS_MAX;
 				txframe->data[2] = 0x00; // zero duration between two consecutive frames
 
-				can_tx_task(txframe);
+				if (can_tx_task(txframe) != ESP_OK) {
+					elm327_response("CAN ERROR\r\r>", 0, queue);
+					break;
+				}
 			}
 		}
 		else
@@ -1130,7 +1155,7 @@ uint8_t elm327_perm_delay()
 	return MAX(elm327_config.perm_cmd_delay, 1);
 }
 
-void clear_perm_commands()
+void clear_perm_commands(bool close_monitor_all)
 {
 	if (elm327_config.perm_cmd_count != 0) {
 		elm327_config.perm_cmd_count = 0;
@@ -1138,6 +1163,13 @@ void clear_perm_commands()
 		elm327_config.perm_cmd_list[0] = 0;
 
 		ESP_LOGI(TAG, "clear permanent commands");
+	}
+
+	if (close_monitor_all) {
+		if (elm327_config.monitor_all) {
+			elm327_config.monitor_all = 0;
+			ESP_LOGW(TAG, "Monitor All is off");
+		}
 	}
 }
 
@@ -1158,7 +1190,7 @@ static char* elm327_perm_send(const char* command_str)
 
 static char* elm327_perm_reset(const char* command_str)
 {
-	clear_perm_commands();
+	clear_perm_commands(false);
 
 	elm327_config.perm_cmd_delay = elm327_parse_hex_str(command_str + 3, strlen(command_str + 3)); // considers length of 'prr'
 
@@ -1167,11 +1199,30 @@ static char* elm327_perm_reset(const char* command_str)
 	return ""; // skip reply
 }
 
+static char* elm327_uds_response_skip(const char* command_str)
+{
+	size_t data_size = MIN(strlen(command_str + 4) / 2, 8); // considers length of 'rsps'
+	elm327_fill_data_from_hex_str(command_str + 4, elm327_config.uds_rps_skip_prefix, data_size);
+	
+	elm327_config.uds_rps_skip_size = data_size;
+
+	return (char*)ok_str;
+}
+
+static char* elm327_uds_response_all(const char* command_str)
+{
+	elm327_config.uds_rps_skip_size = 0;
+	
+	return (char*)ok_str;
+}
+
 
 const xelm327_cmd_t elm327_commands[] = {
 											{"spc", elm327_special_send},//special send (Abit specific - should be the first in the list)
 											{"prs", elm327_perm_send},//send permanent command (Abit specific - should be the first in the list)
-											{"prr", elm327_perm_reset},//reset  permanent commands (Abit specific - should be the first in the list)
+											{"prr", elm327_perm_reset},//reset permanent commands (Abit specific - should be the first in the list)
+											{"rsps", elm327_uds_response_skip},//setup UDS response filtering (Abit specific - should be the first in the list)
+											{"rspa", elm327_uds_response_all},//reset UDS response filtering (Abit specific - should be the first in the list)
 
 											{"fcsd", elm327_set_fc_data},// set the flow control data
 											{"fcsh", elm327_set_fc_header},// set the flow control header

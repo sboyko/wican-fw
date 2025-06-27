@@ -112,6 +112,7 @@ struct esp_websocket_client {
     int                         auto_reconnect;
     bool                        run;
     bool                        wait_for_pong_resp;
+    bool                        ready_to_send;
     EventGroupHandle_t          status_bits;
     xSemaphoreHandle            lock;
     char                        *rx_buffer;
@@ -417,6 +418,7 @@ esp_websocket_client_handle_t esp_websocket_client_init(const esp_websocket_clie
     client->reconnect_tick_ms = _tick_get_ms();
     client->ping_tick_ms = _tick_get_ms();
     client->wait_for_pong_resp = false;
+    client->ready_to_send = false;
 
     int buffer_size = config->buffer_size;
     if (buffer_size <= 0) {
@@ -599,6 +601,9 @@ static void esp_websocket_client_task(void *pv)
     xEventGroupClearBits(client->status_bits, STOPPED_BIT | CLOSE_FRAME_SENT_BIT);
     int read_select = 0;
     while (client->run) {
+        if (client->ready_to_send) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
         if (xSemaphoreTakeRecursive(client->lock, lock_timeout) != pdPASS) {
             ESP_LOGE(TAG, "Failed to lock ws-client tasks, exiting the task...");
             break;
@@ -853,10 +858,13 @@ static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t c
         return ESP_FAIL;
     }
 
+    client->ready_to_send = true;
     if (xSemaphoreTakeRecursive(client->lock, timeout) != pdPASS) {
         ESP_LOGE(TAG, "Could not lock ws-client within %d timeout", (int) timeout);
+        client->ready_to_send = false;
         return ESP_FAIL;
     }
+    client->ready_to_send = false;
 
     if (!esp_websocket_client_is_connected(client)) {
         ESP_LOGE(TAG, "Websocket client is not connected");

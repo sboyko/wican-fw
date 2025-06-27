@@ -512,9 +512,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
                                         esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
-	esp_gatt_rsp_t rsp;
 	static xdev_buffer rx_buffer;
     ESP_LOGV(GATTS_TABLE_TAG, "event = %x\n",event);
+
     switch (event) {
         case ESP_GATTS_REG_EVT:
             esp_ble_gap_set_device_name((const char*)dev_name);
@@ -527,18 +527,21 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_READ_EVT");
             if(profile_handle_table[IDX_VALUE_BLE_STATUS] == param->read.handle)
             {
-            	memset(&rsp, 0, sizeof(esp_gatt_rsp_t));
+				esp_gatt_rsp_t rsp = {0};
             	rsp.attr_value.handle = param->read.handle;
             	rsp.attr_value.len = 1;
             	rsp.attr_value.value[0] = config_server_get_ble_config();
-				esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id,
-						param->reg.status, &rsp);
-
+				const esp_err_t result = esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, param->reg.status, &rsp);
+				if (result != ESP_OK) {
+					ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_response(status) fails: %d", result);
+				}
             }
             break;
         case ESP_GATTS_WRITE_EVT:
+#ifndef NDEBUG		
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT, write value:");
             esp_log_buffer_hex(GATTS_TABLE_TAG, param->write.value, param->write.len);
+#endif
 
             if(profile_handle_table[IDX_VALUE_COMM_TX] == param->write.handle)
             {
@@ -550,6 +553,15 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 					memcpy(rx_buffer.ucElement, param->write.value + offset, rx_buffer.usLen);
 					xQueueSend(*xBle_RX_Queue, &rx_buffer, portMAX_DELAY );
 					offset += rx_buffer.usLen;
+				}
+
+				if (param->write.need_rsp) {
+					esp_gatt_rsp_t rsp = {0};
+					rsp.attr_value.handle = param->write.handle;
+					const esp_err_t result = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, &rsp);
+					if (result != ESP_OK) {
+						ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_response(tx) fails: %d", result);
+					}
 				}
             }
             else if(profile_handle_table[IDX_VALUE_BLE_STATUS] == param->write.handle)
@@ -736,7 +748,7 @@ static void ble_task(void *pvParameters)
 
 				if(free_packet && !(BLE_CONGEST_BIT & xEventGroupGetBits(s_ble_event_group)))
 				{
-					while(xQueuePeek(*xBle_TX_Queue, &tx_buffer, 0))
+					while(xQueuePeek(*xBle_TX_Queue, &tx_buffer, pdMS_TO_TICKS(2)))
 					{
 						// figure out how many packets are needed to send this tx_buffer
 						int num_req_packets = ((ble_send_buf_len + tx_buffer.usLen) / ble_max_data_size);
