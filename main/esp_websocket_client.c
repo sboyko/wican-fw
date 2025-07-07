@@ -602,7 +602,7 @@ static void esp_websocket_client_task(void *pv)
     int read_select = 0;
     while (client->run) {
         if (client->ready_to_send) {
-            vTaskDelay(pdMS_TO_TICKS(1));
+            vTaskDelay(pdMS_TO_TICKS(2));
         }
         if (xSemaphoreTakeRecursive(client->lock, lock_timeout) != pdPASS) {
             ESP_LOGE(TAG, "Failed to lock ws-client tasks, exiting the task...");
@@ -849,7 +849,7 @@ int esp_websocket_client_send_bin(esp_websocket_client_handle_t client, const ch
 static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t client, ws_transport_opcodes_t opcode, const uint8_t *data, int len, TickType_t timeout)
 {
     int need_write = len;
-    int wlen = 0, widx = 0;
+    int widx = 0;
     int ret = ESP_FAIL;
 
     if (client == NULL || len < 0 ||
@@ -858,6 +858,7 @@ static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t c
         return ESP_FAIL;
     }
 
+repeat_send:
     client->ready_to_send = true;
     if (xSemaphoreTakeRecursive(client->lock, timeout) != pdPASS) {
         ESP_LOGE(TAG, "Could not lock ws-client within %d timeout", (int) timeout);
@@ -884,8 +885,17 @@ static int esp_websocket_client_send_with_opcode(esp_websocket_client_handle_t c
         }
         memcpy(client->tx_buffer, data + widx, need_write);
         // send with ws specific way and specific opcode
-        wlen = esp_transport_ws_send_raw(client->transport, current_opcode, (char *)client->tx_buffer, need_write,
+        const int wlen = esp_transport_ws_send_raw(client->transport, current_opcode, (char *)client->tx_buffer, need_write,
                                         (timeout==portMAX_DELAY)? -1 : timeout * portTICK_PERIOD_MS);
+
+        if (wlen == 0 && errno == 0) { // just timeout
+            ESP_LOGW(TAG, "Network error: esp_transport_write() returned %d, errno=%d (timeout-repeat)", wlen, errno);
+
+            xSemaphoreGiveRecursive(client->lock);
+            vTaskDelay(pdMS_TO_TICKS(4));
+            goto repeat_send;
+        }
+
         if (wlen < 0 || (wlen == 0 && need_write != 0)) {
             ret = wlen;
             ESP_LOGE(TAG, "Network error: esp_transport_write() returned %d, errno=%d", ret, errno);

@@ -270,7 +270,7 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
     };
     wifi_config_ap.ap.channel = channel;
 
-    if(config_server_get_wifi_mode() == APSTA_MODE || (sta_ssid != 0 && sta_pass != 0))
+    if(config_server_get_wifi_mode() == APSTA_MODE)// || (sta_ssid != 0 && sta_pass != 0))
     {
     	if(sta_ssid == 0 && sta_pass == 0)
     	{

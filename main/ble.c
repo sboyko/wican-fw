@@ -47,6 +47,8 @@
 #include "comm_server.h"
 #include "config_server.h"
 #include "wifi_network.h"
+#include "elm327.h"
+
 /* Attributes State Machine */
 enum
 {
@@ -83,8 +85,19 @@ static uint8_t adv_config_done = 0;
 
 // see https://punchthrough.com/maximizing-ble-throughput-part-3-data-length-extension-dle-2/
 //
+// MIN: In Bluetooth 4.0, BLE was introduced with a maximum payload of 33 bytes (not including Access Address and CRC fields). 
+// Each layer in the protocol stack takes its cut:
+//  2 bytes for packet header (type and length),
+//  4 bytes for MIC (when encryption is enabled),
+//  4 bytes for L2CAP header (channel ID and packet length),
+// ATT protocol is left with 23 bytes, which is the default and minimal MTU for ATT protocol.
+// With an ATT write request (or notification), 3 bytes are used by command type and attribute ID, _20_ bytes are left for the attribute data.
+//
+// MAX: Using packet length extension introduced in Bluetooth 4.2:
+// Up to 251 bytes at the radio level (255 with MIC), so _242_ bytes available for attribute data.
+//
 #define BLE_ATT_DATA_MIN_SIZE                     20
-#define BLE_ATT_DATA_MAX_SIZE                     244
+#define BLE_ATT_DATA_MAX_SIZE                     240 // intentionally smaller then 242 to prevents Message Integrity Check (MIC) failure (reason = 0x3d)
 
 static uint8_t dev_name[32] = {0};
 static uint8_t manufacturer[]="MeatPi";
@@ -396,7 +409,7 @@ static void ble_send(uint8_t* buf, uint8_t buf_len, int charactValueIndex)
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
-    ESP_LOGI(GATTS_TABLE_TAG, "GAP_EVT, event %d", event);
+    ESP_LOGI(GATTS_TABLE_TAG, "ESP_GAP_BLE_event = %d", event);
 
     switch (event) {
     case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:
@@ -513,7 +526,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
                                         esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
 	static xdev_buffer rx_buffer;
-    ESP_LOGV(GATTS_TABLE_TAG, "event = %x\n",event);
+    ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_event = %d", event);
 
     switch (event) {
         case ESP_GATTS_REG_EVT:
@@ -616,7 +629,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 			conn_params.latency = 0;
 			conn_params.min_int = ESP_BLE_CONN_INT_MIN;
 			conn_params.max_int = ESP_BLE_CONN_INT_MIN;
-			conn_params.timeout = ESP_BLE_CONN_SUP_TOUT_MAX / 4;
+			conn_params.timeout = ESP_BLE_CONN_SUP_TOUT_MAX / 8; // 4s
 
 			if (esp_ble_gap_update_conn_params(&conn_params) == ESP_OK) {
 				ESP_LOGI(GATTS_TABLE_TAG, "update_conn_params: interval_min = %d , interval_max = %d , latency = %d , timeout = %d",
@@ -641,6 +654,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             gpio_set_level(conn_led, 1);
             /* start advertising again when missing the connect */
             esp_ble_gap_start_advertising(&heart_rate_adv_params);
+			clear_perm_commands(true);
             break;
         case ESP_GATTS_OPEN_EVT:
             break;
@@ -788,7 +802,9 @@ static void ble_task(void *pvParameters)
 			
 								ble_send(ble_send_buf, ble_send_buf_len, IDX_VALUE_COMM_RX);
 								ble_send_buf_len = 0;
-								if(--free_packet == 0 && tx_buffer_remaining > 0)
+								free_packet -= 1;
+
+								if(free_packet == 0 && (tx_buffer.usLen - tx_buffer_copied) > 0)
 								{
 									// We did a computation above to make sure we had a enough
 									// free_packets. If we are down to zero and there are still

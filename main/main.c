@@ -69,7 +69,7 @@ static QueueHandle_t* host_txQueue = NULL;
 static int host_tx_failed_waits = 0;
 
 static uint8_t protocol = SLCAN;
-static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(10);
+static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(20);
 
 uint8_t project_hardware_rev;
 int FTP_TASK_FINISH_BIT = BIT2;
@@ -461,7 +461,7 @@ void app_main(void)
 //	}
 
 
-	const bool use_modem = false;
+	const bool use_modem = true;
 	wifi_network_init(use_modem ? "WiCANabitabit" : NULL, use_modem ? "airabit123" : NULL);
 	int32_t port = config_server_get_port();
 
@@ -554,5 +554,5 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_WARN);
+	esp_log_level_set("*", ESP_LOG_NONE);
 }

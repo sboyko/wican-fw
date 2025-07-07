@@ -22,6 +22,8 @@
 #ifndef __ELM327__
 #define __ELM327__
 
+#include "hal/twai_types.h"
+
 #define ELM327_CAN_RX   0x01
 #define ELM327_CAN_TX   0x02
 

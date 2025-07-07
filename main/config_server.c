@@ -1868,7 +1868,7 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 
 	free(signatureEnc);
 
-	ESP_LOGI(TAG, "Authentication done: %s (length = %d)", authBuff, strlen(authBuff));
+	ESP_LOGW(TAG, "Authentication done: %s (length = %d)", authBuff, strlen(authBuff));
 
 	if (esp_websocket_client_send(client, authBuff, strlen(authBuff), pdMS_TO_TICKS(CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000)) != strlen(authBuff)) {
 		ESP_LOGE(TAG, "esp_websocket_client_send() fails");
