@@ -481,7 +481,7 @@ void app_main(void)
     if(config_server_get_ble_config())
     {
     	int pass = config_server_ble_pass();
-    	xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
+    	xmsg_ble_tx_queue = xQueueCreate(96, sizeof( xdev_buffer) );
     	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, pass, &ble_uid[0]);
     }
 

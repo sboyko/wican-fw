@@ -1120,7 +1120,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 				elm327_response(rsp, 0, queue);
 
 				break;
-			} else if (fnHasNewData()) {
+			} else if (elapsedMs >= totalMs / 10 && fnHasNewData()) {
 				ESP_LOGW(TAG, "response reset by incoming data = %lu ms", elapsedMs);
 				break;
 			}

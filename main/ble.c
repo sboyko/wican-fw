@@ -404,6 +404,8 @@ static void ble_send(uint8_t* buf, uint8_t buf_len, int charactValueIndex)
 			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
 #endif
 		}
+
+		vTaskDelay(pdMS_TO_TICKS(5)); // prevents Message Integrity Check (MIC) failure (reason = 0x3d)
 	//}
 }
 
@@ -647,7 +649,10 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
             break;
         case ESP_GATTS_DISCONNECT_EVT:
-            ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, disconnect reason 0x%x", param->disconnect.reason);
+			// Error 61 (0x3d) means "CONNECTION TERMINATED DUE TO MIC FAILURE". 
+			// The Message Integrity Check (MIC) is a 4-bytes extra field added to the BLE packet when encryption is enabled. 
+			//
+            ESP_LOGW(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, disconnect reason 0x%x", param->disconnect.reason);
 //            wifi_network_restart();
 //        	config_server_restart();
             //is_connected = false;
