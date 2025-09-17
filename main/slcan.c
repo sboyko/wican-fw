@@ -49,7 +49,7 @@ uint8_t sl_bitrate[] = {CAN_10K, CAN_20K, CAN_50K, CAN_100K,
 
 
 TimerHandle_t xSlTimer = NULL;
-void (*slcan_response)(char*, uint32_t, QueueHandle_t *q);
+bool (*slcan_response)(char*, uint32_t, QueueHandle_t *q);
 
 static uint16_t slcan_get_time(void)
 {
@@ -874,7 +874,7 @@ int8_t slcan_parse_str1(uint8_t *buf, uint8_t len, twai_message_t *frame)
     return 0;
 }
 
-void slcan_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q))
+void slcan_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q))
 {
 	slcan_response = send_to_host;
 }

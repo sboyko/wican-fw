@@ -54,7 +54,7 @@ static esp_timer_handle_t periodic_timer;
 static const uint32_t can_speed[] = {5000, 10000, 20000, 25000, 50000, 100000,
 						125000, 250000, 500000, 800000, 1000000};
 
-void (*gvret_response)(char*, uint32_t, QueueHandle_t *q);
+bool (*gvret_response)(char*, uint32_t, QueueHandle_t *q);
 
 void gvert_tmr_set_start(void)
 {
@@ -741,7 +741,7 @@ static void gvret_broadcast_task(void *pvParameters)
 	}
 
 }
-void gvret_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q))
+void gvret_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q))
 {
 	gvret_response = send_to_host;
 

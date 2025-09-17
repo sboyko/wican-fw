@@ -21,7 +21,15 @@
 #ifndef __WC_UART_H__
 #define __WC_UART_H__
 
-void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led);
-bool wc_uart_enabled(void);
+void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t connected_led, uint8_t kline_led);
+
+// Set baud rate for KLine
+bool wc_kline_baudrate(int baudRate);
+
+/**
+ * Set (periodically) KLine using mode, results in switching LED on.
+ * KLine using mode will be automatically turned off when not called for more then 10 seconds.
+ */
+void wc_kline_enable(bool isOnNotOff);
 
 #endif

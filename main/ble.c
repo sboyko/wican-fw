@@ -200,6 +200,7 @@ static struct gatts_profile_inst heart_rate_profile_tab[HEART_PROFILE_NUM] = {
 };
 
 static QueueHandle_t *xBle_TX_Queue = NULL, *xBle_RX_Queue = NULL;
+static esp_ble_conn_update_params_t conn_params = {0};
 /* Service */
 static const uint16_t GATTS_UUID_COMM_SERVICE      = 0xfee0;
 static const uint16_t GATTS_UUID_COMM_CHAR_TX      = 0xfee1;
@@ -626,7 +627,6 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 
 			logBtDeviceAddress("remote BD_ADDR", param->connect.remote_bda);
 
-			esp_ble_conn_update_params_t conn_params = {0};
 			memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
 			conn_params.latency = 0;
 			conn_params.min_int = ESP_BLE_CONN_INT_MIN;
@@ -987,4 +987,11 @@ void ble_enable(void)
 {
 	ble_init(0,0,0,0,0);
 //	esp_bluedroid_enable();
+}
+
+void ble_disconnect()
+{
+	if (ble_connected()) {
+		esp_ble_gap_disconnect(conn_params.bda);
+	}
 }

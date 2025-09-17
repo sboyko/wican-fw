@@ -27,11 +27,14 @@
 #define ELM327_CAN_RX   0x01
 #define ELM327_CAN_TX   0x02
 
-void elm327_init(void (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type));
-void elm327_process_cmd(uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHasNewData)());
+void elm327_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type));
+void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, bool (*fnHasNewData)());
 void elm327_process_perm_cmd(QueueHandle_t *q, bool (*fnHasNewData)());
 uint8_t elm327_perm_delay();
 void clear_perm_commands(bool close_monitor_all);
-int8_t elm327_process_can_frame(uint8_t *buf, twai_message_t *frame);
+int8_t elm327_process_can_frame(const uint8_t *buf, twai_message_t *frame);
 int elm327_print_canid(char *buff, twai_message_t *frame);
+
+void elm327_uart_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue);
+
 #endif

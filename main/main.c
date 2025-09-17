@@ -56,15 +56,18 @@
 #define TAG 		__func__
 #define TX_GPIO_NUM             	0
 #define RX_GPIO_NUM             	3
-#define CONNECTED_LED_GPIO_NUM		8
-#define ACTIVE_LED_GPIO_NUM			9
 #define BLE_EN_PIN_NUM				5
-#define PWR_LED_GPIO_NUM			7
+
+#define PWR_LED_GPIO_NUM			7  // blue
+#define CONNECTED_LED_GPIO_NUM		8  // green
+#define ACTIVE_LED_GPIO_NUM			9  // yellow
+
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CONNECTED_LED_GPIO_NUM) | (1ULL<<ACTIVE_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM))
 #define BLE_EN_PIN_SEL		(1ULL<<BLE_EN_PIN_NUM)
 #define BLE_Enabled()		(!gpio_get_level(BLE_EN_PIN_NUM))
 
 static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_mqtt_rx_queue;
+static QueueHandle_t xmsg_uart_rx_queue;
 static QueueHandle_t* host_txQueue = NULL;
 static int host_tx_failed_waits = 0;
 
@@ -152,7 +155,7 @@ static void process_led(bool state)
 }
 
 //TODO: make this pretty?
-void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
+bool host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 {
 	static xdev_buffer xsend_buffer;
 
@@ -165,7 +168,7 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 		if (xQueueSend( *q, &xsend_buffer, RESPONSE_TICKS ) != pdTRUE) {
 			ESP_LOGE(TAG, "xQueueSend() fails");
 			assert(false);
-			break;
+			return false;
 		}
 		offset += xsend_buffer.usLen;
 	
@@ -173,6 +176,8 @@ void host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 		ESP_LOG_BUFFER_HEXDUMP(TAG, xsend_buffer.ucElement, xsend_buffer.usLen, ESP_LOG_INFO);
 #endif
 	}
+
+	return true;
 }
 
 bool fnHasNewData()
@@ -183,13 +188,24 @@ bool fnHasNewData()
 static void host_rx_task(void *pvParameters)
 {
 	xdev_buffer ucTCP_RX_Buffer;
+	int64_t rx_time = esp_timer_get_time();
 
 	while(1)
 	{
 		const uint8_t perm_delay = (protocol == OBD_ELM327 ? elm327_perm_delay() : 0);
 
 		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
-			if(perm_delay > 0 && host_txQueue) {
+			if (esp_timer_get_time() - rx_time > 10*1000*1000) {
+				if (host_txQueue) {
+					//host_txQueue = NULL;
+					//clear_perm_commands(true);
+					//ble_disconnect();
+
+					esp_restart();
+				}
+			}
+
+			if (perm_delay > 0 && host_txQueue) {
 				elm327_process_perm_cmd(host_txQueue, fnHasNewData);
 				host_tx_failed_waits = 0;
 			} else {
@@ -200,6 +216,7 @@ static void host_rx_task(void *pvParameters)
 			continue;
 		}
 		host_tx_failed_waits = 0;
+		rx_time = esp_timer_get_time();
 
 #ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
@@ -361,6 +378,7 @@ void app_main(void)
 
 	gpio_set_level(CONNECTED_LED_GPIO_NUM, 1);
 	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
+	gpio_set_level(PWR_LED_GPIO_NUM, 1);
 
     xMsg_Rx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
     xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
@@ -500,7 +518,10 @@ void app_main(void)
         	ESP_LOGI(TAG, "project_hardware_rev: USB");
 
 			xmsg_uart_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
-       		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM);
+			xmsg_uart_rx_queue = xQueueCreate(32, sizeof( xdev_buffer) );
+       		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, CONNECTED_LED_GPIO_NUM, PWR_LED_GPIO_NUM);
+			
+			elm327_uart_init(&xmsg_uart_tx_queue, &xmsg_uart_rx_queue);
         }
         else
         {
@@ -519,33 +540,19 @@ void app_main(void)
     xTaskCreate(can_rx_task, "can_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
     xTaskCreate(host_rx_task, "host_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
 
-    if(project_hardware_rev != WICAN_V210)
-    {
-		if(config_server_get_sleep_config())
-		{
-			float sleep_voltage = 0;
-
-			if(config_server_get_sleep_volt(&sleep_voltage) != -1)
-			{
-				sleep_mode_init(1, sleep_voltage);
-			}
-			else
-			{
-				sleep_mode_init(0, 13.1f);
+	// temporary disable due to conflict with setup_uart_usb(..) in 'wc_uart.c'
+	/*
+	uint8_t enable_sleep = 0;
+	float sleep_voltage = 13.1f;
+    if (project_hardware_rev != WICAN_V210) {
+		if (config_server_get_sleep_config()) {
+			if (config_server_get_sleep_volt(&sleep_voltage)) {
+				enable_sleep = 1;
 			}
 		}
-		else
-		{
-			sleep_mode_init(0, 13.1f);
-		}
     }
-    else
-    {
-    	sleep_mode_init(0, 13.1f);
-    }
-
-    gpio_set_level(PWR_LED_GPIO_NUM, 1);
-    
+	sleep_mode_init(enable_sleep, sleep_voltage);
+	*/
 
 	// xEventTask = xEventGroupCreate();
 	// xTaskCreate(ftp_task, "FTP", 1024*6, NULL, 2, NULL);

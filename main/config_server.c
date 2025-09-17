@@ -2068,20 +2068,19 @@ int8_t config_server_get_sleep_config(void)
 	return -1;
 }
 
-int8_t config_server_get_sleep_volt(float *sleep_volt)
+bool config_server_get_sleep_volt(float *sleep_volt)
 {
-	*sleep_volt = atof(device_config.sleep_volt);
-
-	if(device_config.sleep_volt[2] != '.')
-	{
-		return -1;
+	if (device_config.sleep_volt[2] != '.') {
+		return false;
 	}
 
-	if(*sleep_volt > 12.0f && *sleep_volt <= 15.0f)
-	{
-		return 1;
+	const float volt = atof(device_config.sleep_volt);
+
+	if (volt > 12.0f && volt <= 15.0f) {
+		*sleep_volt = volt;
+		return true;
 	}
-	return -1;
+	return false;
 }
 
 int8_t config_server_get_battery_alert_config(void)
