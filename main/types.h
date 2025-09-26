@@ -22,6 +22,8 @@
 #ifndef __TYPES_H__
 #define __TYPES_H__
 
+#define WICAN_RX_QUEUE_SIZE	120 // size of the input messages queue (used for all protocols)
+
 #define DEV_BUFFER_LENGTH	64
 
 typedef enum

@@ -31,7 +31,7 @@
 #include "driver/gpio.h"
 #include "types.h"
 #include "wc_uart.h"
-#include "rom/uart.h"
+#include "hal/uart_hal.h"
 
 
 typedef enum {
@@ -42,6 +42,8 @@ typedef enum {
 static const int USB_UART_BAUDRATE = 2400000;
 static const int RX_BUF_SIZE = 1024;
 static const int RX_QUEUE_WAIT_TIME_MS = 15;
+
+static const uart_port_t uart_num = UART_NUM_0;
 
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL, *kline_rx_queue = NULL;
 static QueueHandle_t uart0_queue;
@@ -63,18 +65,22 @@ void setup_uart_usb(int baudRate)
         .source_clk = UART_SCLK_APB,
     };
     // We won't use a buffer for sending data.
-    //uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
-	uart_driver_install(UART_NUM_0, RX_BUF_SIZE * 4, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED);
-    uart_param_config(UART_NUM_0, &uart_config);
+    //uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
+	uart_driver_install(uart_num, RX_BUF_SIZE * 4, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED);
+    uart_param_config(uart_num, &uart_config);
+
+    // Enable UART RX FIFO full threshold interrupts
+    uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL);
+
 //																					output,			input
 //    esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int rts_io_num, int cts_io_num);
-//    uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, 2, 10);
-    uart_set_pin(UART_NUM_0, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+//    uart_set_pin(uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, 2, 10);
+    uart_set_pin(uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 }
 
 void close_uart_usb()
 {
-    uart_driver_delete(UART_NUM_0);
+    uart_driver_delete(uart_num);
 }
 
 static void uart_rx_task(void *arg)
@@ -129,7 +135,7 @@ static void uart_rx_task(void *arg)
 			int to_write = offset;
 			while (to_write > 0)
 			{
-				int written = uart_write_bytes(UART_NUM_0, ws_data + (offset - to_write), to_write);
+				int written = uart_write_bytes(uart_num, ws_data + (offset - to_write), to_write);
 				if (written < 0) {
                     //ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     assert(false);
@@ -148,7 +154,7 @@ static void uart_rx_task(void *arg)
 
                 while (offset < event.size) {
                     io_buffer.usLen = MIN(event.size - offset, sizeof(io_buffer.ucElement));
-                    io_buffer.usLen = uart_read_bytes(UART_NUM_0, io_buffer.ucElement, io_buffer.usLen, 0);
+                    io_buffer.usLen = uart_read_bytes(uart_num, io_buffer.ucElement, io_buffer.usLen, 0);
                     if (io_buffer.usLen < 0) {
                         assert(false);
                         break;
@@ -162,6 +168,13 @@ static void uart_rx_task(void *arg)
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(1));
+                break;
+            } else if (event.type == UART_BUFFER_FULL || event.type == UART_FIFO_OVF) {
+                close_uart_usb();
+                setup_uart_usb(uart_baud);
+
+                vTaskDelay(pdMS_TO_TICKS(1));
+                break;
             }
         }
         
@@ -177,12 +190,12 @@ static void uart_tx_task(void *arg)
     while (1)
     {
     	if (xQueueReceive(*xuart_tx_queue, &tx_buffer, portMAX_DELAY)) {
-        	if (uart_write_bytes(UART_NUM_0, tx_buffer.ucElement, tx_buffer.usLen) != tx_buffer.usLen) {
+        	if (uart_write_bytes(uart_num, tx_buffer.ucElement, tx_buffer.usLen) != tx_buffer.usLen) {
                 assert(false);
             }
         }
 
-//    	rx_buffer.usLen = uart_read_bytes(UART_NUM_0, rx_buffer.ucElement, RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
+//    	rx_buffer.usLen = uart_read_bytes(uart_num, rx_buffer.ucElement, RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
 //    	rx_buffer.dev_channel = DEV_UART;
 //    	if(rx_buffer.usLen > 0)
 //    	{
@@ -217,11 +230,11 @@ bool wc_kline_baudrate(int baudRate)
 
     return true;
 
-    // if (uart_set_baudrate(UART_NUM_0, baudRate) == ESP_OK) {
+    // if (uart_set_baudrate(uart_num, baudRate) == ESP_OK) {
     //     vTaskDelay(pdMS_TO_TICKS(5));
 
     //     uint32_t actualBaudRate = 0;
-    //     if (uart_get_baudrate(UART_NUM_0, &actualBaudRate) == ESP_OK && actualBaudRate == baudRate) {
+    //     if (uart_get_baudrate(uart_num, &actualBaudRate) == ESP_OK && actualBaudRate == baudRate) {
     //         return true;
     //     }
     // }

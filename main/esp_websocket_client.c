@@ -538,10 +538,9 @@ esp_err_t esp_websocket_client_set_uri(esp_websocket_client_handle_t client, con
 
 static esp_err_t esp_websocket_client_recv(esp_websocket_client_handle_t client)
 {
-    int rlen;
     client->payload_offset = 0;
     do {
-        rlen = esp_transport_read(client->transport, client->rx_buffer, client->buffer_size, client->config->network_timeout_ms);
+        int rlen = esp_transport_read(client->transport, client->rx_buffer, client->buffer_size, client->config->network_timeout_ms);
         if (rlen < 0) {
             ESP_LOGE(TAG, "Error read data");
             return ESP_FAIL;
@@ -554,7 +553,14 @@ static esp_err_t esp_websocket_client_recv(esp_websocket_client_handle_t client)
             return ESP_OK;
         }
 
+        //xSemaphoreGiveRecursive(client->lock);
+
         esp_websocket_client_dispatch_event(client, WEBSOCKET_EVENT_DATA, client->rx_buffer, rlen);
+
+        // if (xSemaphoreTakeRecursive(client->lock, portMAX_DELAY) != pdPASS) {
+        //     ESP_LOGE(TAG, "Failed to lock ws-client tasks, exiting the task...");
+        //     return ESP_FAIL;
+        // }
 
         client->payload_offset += rlen;
     } while (client->payload_offset < client->payload_len);
@@ -608,13 +614,14 @@ static void esp_websocket_client_task(void *pv)
             ESP_LOGE(TAG, "Failed to lock ws-client tasks, exiting the task...");
             break;
         }
+        
         switch ((int)client->state) {
             case WEBSOCKET_STATE_INIT:
-                if (client->transport == NULL) {
-                    ESP_LOGE(TAG, "There are no transport");
-                    client->run = false;
-                    break;
-                }
+                // if (client->transport == NULL) {
+                //     ESP_LOGE(TAG, "There are no transport");
+                //     client->run = false;
+                //     break;
+                // }
                 if (esp_transport_connect(client->transport,
                                           client->config->host,
                                           client->config->port,
@@ -690,7 +697,9 @@ static void esp_websocket_client_task(void *pv)
                 ESP_LOGI(TAG, "Client run iteration in a default state: %d", client->state);
                 break;
         }
+
         xSemaphoreGiveRecursive(client->lock);
+
         if (WEBSOCKET_STATE_CONNECTED == client->state) {
             read_select = esp_transport_poll_read(client->transport, 1000); //Poll every 1000ms
             if (read_select < 0) {
@@ -872,10 +881,10 @@ repeat_send:
         goto unlock_and_return;
     }
 
-    if (client->transport == NULL) {
-        ESP_LOGE(TAG, "Invalid transport");
-        goto unlock_and_return;
-    }
+    // if (client->transport == NULL) {
+    //     ESP_LOGE(TAG, "Invalid transport");
+    //     goto unlock_and_return;
+    // }
     uint32_t current_opcode = opcode;
     while (widx < len || current_opcode) {  // allow for sending "current_opcode" only message with len==0
         if (need_write > client->buffer_size) {
@@ -909,11 +918,11 @@ repeat_send:
     }
     ret = widx;
 unlock_and_return:
-    xSemaphoreGiveRecursive(client->lock);
-
     if (ret == len) {
         client->ping_tick_ms = _tick_get_ms();
     }
+
+    xSemaphoreGiveRecursive(client->lock);
 
     return ret;
 }

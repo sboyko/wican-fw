@@ -180,9 +180,9 @@ bool host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 	return true;
 }
 
-bool fnHasNewData()
+int fnHasNewData()
 {
-	return uxQueueMessagesWaiting(xMsg_Rx_Queue) > 0;
+	return uxQueueMessagesWaiting(xMsg_Rx_Queue);
 }
 
 static void host_rx_task(void *pvParameters)
@@ -205,18 +205,27 @@ static void host_rx_task(void *pvParameters)
 				}
 			}
 
+			bool hasCommand = false;
 			if (perm_delay > 0 && host_txQueue) {
-				elm327_process_perm_cmd(host_txQueue, fnHasNewData);
-				host_tx_failed_waits = 0;
-			} else {
+				hasCommand = elm327_process_perm_cmd(&ucTCP_RX_Buffer);
+			} else if (esp_timer_get_time() - rx_time > 3*1000*1000) {
+				if (elm327_process_idle_cmd(&ucTCP_RX_Buffer)) {
+					hasCommand = true;
+					rx_time = esp_timer_get_time();
+				}
+			}
+
+			if (!hasCommand) {
 				if (++host_tx_failed_waits > 400) {
 					host_txQueue = NULL;
 				}
+				continue;
 			}
-			continue;
+		} else {
+			rx_time = esp_timer_get_time();
 		}
+
 		host_tx_failed_waits = 0;
-		rx_time = esp_timer_get_time();
 
 #ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
@@ -275,7 +284,7 @@ static void can_rx_task(void *pvParameters)
 
 	while(1)
 	{
-        if(can_receive(&rx_msg, pdMS_TO_TICKS(2)) == ESP_OK)
+        if(can_receive(&rx_msg, pdMS_TO_TICKS(5)) == ESP_OK)
         {
 			// ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
 			// 	(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
@@ -380,7 +389,7 @@ void app_main(void)
 	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
 	gpio_set_level(PWR_LED_GPIO_NUM, 1);
 
-    xMsg_Rx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
+    xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) );
     xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
     xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
 
