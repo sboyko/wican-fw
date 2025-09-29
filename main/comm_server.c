@@ -62,6 +62,7 @@ static void tcp_server_rx_task(void *pvParameters)
 //	int addr_family = (int)pvParameters;
     xdev_buffer rx_buffer;
 	rx_buffer.dev_channel = DEV_WIFI;
+	char ws_data[512];
 
 wait_skt_rx:
 	xEventGroupWaitBits(
@@ -72,30 +73,37 @@ wait_skt_rx:
 					  portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
 	while(1)
 	{
-		rx_buffer.usLen = recv(sock, rx_buffer.ucElement, sizeof(rx_buffer.ucElement), 0);
+		const int len = recv(sock, ws_data, sizeof(ws_data), 0);
         //if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
         {
         	//check if sock still connected?
-			if (rx_buffer.usLen < 0)
-			{
+			if (len < 0) {
 				xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 				xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 				ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
 				//xSemaphoreGive( xTCP_Socket_Semaphore );
 				goto wait_skt_rx;
 
-			} else if (rx_buffer.usLen == 0)
-			{
+			}
+			else if (len == 0) {
 				xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 				xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 				ESP_LOGW(TAG, "Connection closed");
 				//xSemaphoreGive( xTCP_Socket_Semaphore );
 				goto wait_skt_rx;
 			}
-			else
-			{
-		        //TODO: what happens if blocked for ever?
-				xQueueSend( *xRX_Queue, &rx_buffer, portMAX_DELAY );
+			else {
+				int offset = 0;
+				while (offset < len) {
+					rx_buffer.usLen = MIN(len - offset, sizeof(rx_buffer.ucElement));
+					memcpy(rx_buffer.ucElement, ws_data + offset, rx_buffer.usLen);
+					xQueueSend( *xRX_Queue, &rx_buffer, portMAX_DELAY );
+					offset += rx_buffer.usLen;
+				}
+
+				if (uxQueueMessagesWaiting(*xTX_Queue) > 0) {
+					vTaskDelay(pdMS_TO_TICKS(1));
+				}
 			}
 			//xSemaphoreGive( xTCP_Socket_Semaphore );
         }

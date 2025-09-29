@@ -911,7 +911,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 
 /*__attribute__((optimize("O0")))*/ static int8_t elm327_request(const char *cmd, const size_t cmd_len, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)())
 {
-	static int rsp_nowait_count = 0;
+	//static int rsp_nowait_count = 0;
 	
 	twai_message_t txframe;
 	txframe.identifier = elm327_get_identifier();
@@ -975,14 +975,14 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 	}
 
 	if (req_expected_rsp == 0) {
-		rsp_nowait_count += 1;
-		if (rsp_nowait_count >= TX_QUEUE_LENGTH) {
-			rsp_nowait_count = 0;
-			vTaskDelay(pdMS_TO_TICKS(1));
-		}
+		// rsp_nowait_count += 1;
+		// if (rsp_nowait_count >= TX_QUEUE_LENGTH) {
+		// 	rsp_nowait_count = 0;
+		// 	vTaskDelay(pdMS_TO_TICKS(1));
+		// }
 		return 0;
 	}
-	rsp_nowait_count = 0;
+	// rsp_nowait_count = 0;
 
 	return elm327_request_wait_answer(req_expected_rsp, &txframe, fc_less_mode, rsp, queue, fnHasNewData);
 }
@@ -1411,6 +1411,10 @@ void clear_perm_commands(bool close_monitor_all)
 			elm327_config.monitor_all = 0;
 			ESP_LOGW(TAG, "Monitor All is off");
 		}
+		if (elm327_config.uds_rps_skip_size > 0) {
+			elm327_config.uds_rps_skip_size = 0;
+			ESP_LOGW(TAG, "UDS skip mode is off");
+		}
 	}
 }
 
@@ -1581,6 +1585,8 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 					// Carscanner gets out of sync: the Carscanner log shows the next
 					// command with a response from the previous command.
 					cmd_len = 0;
+
+					esp_restart();
 					break;
 				}
 			}
@@ -1609,12 +1615,17 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 		{
 			if (isspace(buf[i])) {
 				// To stop monitoring, simply send space character to the ELM327, then wait for it to respond with a prompt character ('>')
-				if (cmd_len == 0 && elm327_config.monitor_all) {
-					elm327_config.monitor_all = 0;
-			
-					elm327_response("\r>", 0, q);
+				if (cmd_len == 0) {
+					if (elm327_config.monitor_all) {
+						elm327_config.monitor_all = 0;
+						ESP_LOGW(TAG, "Monitor All is off");
 
-					ESP_LOGW(TAG, "Monitor All is off");
+						elm327_response("\r>", 0, q);
+					}
+					if (elm327_config.uds_rps_skip_size > 0) {
+						elm327_config.uds_rps_skip_size = 0;
+						ESP_LOGW(TAG, "UDS skip mode is off");
+					}
 				}
 			} else {
 				cmd_buffer[cmd_len++] = (char)tolower(buf[i]);

@@ -54,7 +54,7 @@ static UartMode request_uart_mode = UART_USB;
 static int request_uart_baud = 0;
 
 
-void setup_uart_usb(int baudRate)
+static void setup_uart_usb(int baudRate)
 {
     const uart_config_t uart_config = {
         .baud_rate = baudRate,
@@ -69,8 +69,8 @@ void setup_uart_usb(int baudRate)
 	uart_driver_install(uart_num, RX_BUF_SIZE * 4, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED);
     uart_param_config(uart_num, &uart_config);
 
-    // Enable UART RX FIFO full threshold interrupts
-    uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL);
+    // // Enable UART RX FIFO full threshold interrupts
+    // uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL|UART_INTR_RXFIFO_OVF);
 
 //																					output,			input
 //    esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int rts_io_num, int cts_io_num);
@@ -78,9 +78,19 @@ void setup_uart_usb(int baudRate)
     uart_set_pin(uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 }
 
-void close_uart_usb()
+static void close_uart_usb()
 {
     uart_driver_delete(uart_num);
+}
+
+static void reset_uart(int baudRate)
+{
+    /*
+    close_uart_usb();
+    vTaskDelay(pdMS_TO_TICKS(10));
+    setup_uart_usb(baudRate);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    */
 }
 
 static void uart_rx_task(void *arg)
@@ -139,6 +149,8 @@ static void uart_rx_task(void *arg)
 				if (written < 0) {
                     //ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     assert(false);
+
+                    reset_uart(uart_baud);
                     break;
 				}
 				to_write -= written;
@@ -157,25 +169,26 @@ static void uart_rx_task(void *arg)
                     io_buffer.usLen = uart_read_bytes(uart_num, io_buffer.ucElement, io_buffer.usLen, 0);
                     if (io_buffer.usLen < 0) {
                         assert(false);
+
+                        reset_uart(uart_baud);
                         break;
                     }
                     if (uart_mode == UART_KLINE) {
-                        xQueueSend(*kline_rx_queue, &io_buffer, portMAX_DELAY);
+                        xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(1));
                     } else {
-                        xQueueSend(*xuart_rx_queue, &io_buffer, portMAX_DELAY);
+                        xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(1));
                     }
                     offset += io_buffer.usLen;
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(1));
-                break;
-            } else if (event.type == UART_BUFFER_FULL || event.type == UART_FIFO_OVF) {
-                close_uart_usb();
-                setup_uart_usb(uart_baud);
-
-                vTaskDelay(pdMS_TO_TICKS(1));
+                
                 break;
             }
+            // else if (event.type == UART_BUFFER_FULL || event.type == UART_FIFO_OVF) {
+            //     reset_uart(uart_baud);
+            //     break;
+            // }
         }
         
         wait_ms = (++failed_waits > 2000) ? RX_QUEUE_WAIT_TIME_MS : 1;
