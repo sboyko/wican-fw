@@ -1628,8 +1628,12 @@ static void ws_tx_task(void *pvParameters)
 				memcpy(ws_data + offset, tx_buffer.ucElement, tx_buffer.usLen);
 				offset += tx_buffer.usLen;
 
-				if (xQueuePeek(*xTX_Queue, &tx_buffer, pdMS_TO_TICKS(5))
-						&& offset + tx_buffer.usLen < sizeof(ws_data)) {
+				if (offset + sizeof(tx_buffer.ucElement) / 4 > sizeof(ws_data)) {
+					break;
+				}
+
+				if (xQueuePeek(*xTX_Queue, &tx_buffer, pdMS_TO_TICKS(4))
+						&& offset + tx_buffer.usLen <= sizeof(ws_data)) {
 					if (xQueueReceive(*xTX_Queue, &tx_buffer, 0) != pdTRUE) {
 						ESP_LOGE(TAG, "xQueueReceive() fails");
 						assert(false);
@@ -1971,6 +1975,10 @@ wait_wifi_station:
 
 	esp_websocket_client_config_t websocket_cfg = {};
 	websocket_cfg.uri = "ws://212.24.43.2:80/stream/remote";
+	websocket_cfg.keep_alive_enable = true;
+	websocket_cfg.keep_alive_idle = 15;
+	websocket_cfg.keep_alive_interval = 15;
+	websocket_cfg.keep_alive_count = 5;
 
 	ws_authenticated = false;
 
