@@ -151,12 +151,26 @@ void wifi_network_deinit(void)
 void wifi_network_restart(void)
 {
 	xEventGroupSetBits(s_wifi_event_group, WIFI_INIT_BIT);
+
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_network_event_handler,
+                                                        NULL,
+                                                        &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &wifi_network_event_handler,
+                                                        NULL,
+                                                        &instance_got_ip));
+
     esp_err_t err = esp_wifi_start();
-    esp_wifi_disconnect();
-    if (err == ESP_ERR_WIFI_NOT_INIT)
+    if (err != ESP_OK)
     {
         return;
     }
+    esp_wifi_connect();
 }
 bool wifi_network_is_connected(void)
 {

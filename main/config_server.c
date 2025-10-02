@@ -1400,7 +1400,7 @@ void vrestartTimerCallback( TimerHandle_t xTimer )
 //static char* device_config = NULL;
 static uint8_t esp_spiffs_flag = 0;
 static httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-static httpd_handle_t config_server_init(void)
+static void config_server_init()
 {
 //	const char* base_path = "/"; //useless?
 //
@@ -1542,7 +1542,10 @@ static httpd_handle_t config_server_init(void)
                          it expires. */
                          vrestartTimerCallback
                        );
+}
 
+static httpd_handle_t config_httpd_start()
+{
     // Start the httpd server
 	config.max_uri_handlers = 10;
     ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
@@ -1570,28 +1573,12 @@ static httpd_handle_t config_server_init(void)
     ESP_LOGI(TAG, "Error starting server!");
     return NULL;
 }
+
 void config_server_restart(void)
 {
-    // Start the httpd server
-    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
-    if (httpd_start(&server, &config) == ESP_OK)
-    {
-        // Set URI handlers
-        ESP_LOGI(TAG, "Registering URI handlers");
-        httpd_register_uri_handler(server, &index_uri);
-        httpd_register_uri_handler(server, &store_config_uri);
-        httpd_register_uri_handler(server, &check_status_uri);
-        httpd_register_uri_handler(server, &load_config_uri);
-        httpd_register_uri_handler(server, &logo_uri);
-        httpd_register_uri_handler(server, &ws);
-        httpd_register_uri_handler(server, &file_upload);
-		httpd_register_uri_handler(server, &system_reboot);
-		httpd_register_uri_handler(server, &store_canflt_uri);
-		httpd_register_uri_handler(server, &load_canflt_uri);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Error starting server!");
+	if (server == NULL) {
+		server = config_httpd_start();
+	}
 }
 void config_server_stop(void)
 {
@@ -2043,7 +2030,8 @@ void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, u
     	xTX_Queue = xTXp_Queue;
     	xRX_Queue = xRXp_Queue;
         ESP_LOGI(TAG, "Starting webserver");
-        server = config_server_init();
+        config_server_init();
+		server = config_httpd_start();
 
         xTaskCreate(ws_tx_task, "ws_tx_task", 1024*4, (void*)AF_INET, 5, &ws_tx_task_handle);
         xTaskCreate(ws_server_rx_task, "ws_server_rx_task", 1024*4, (void*)AF_INET, 5, NULL);
