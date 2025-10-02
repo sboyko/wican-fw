@@ -991,7 +991,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 {
 	TickType_t totalMs = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
 	const int64_t txtime = esp_timer_get_time();
-	uint8_t rsp_found = 0;
+	bool rsp_found = false;
 	uint8_t number_of_rsp = 0;
 
 	uint8_t sendControlFrame = false;
@@ -1005,13 +1005,13 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 			totalMs += elapsedTimeMs(txtime_local);
 
 			//reset timeout after response is received
-			rsp_found = 1;
+			rsp_found = true;
 			number_of_rsp++;
 
 			// Identify what kind of frame this is.
 			int rx_frame_data_length = 0;
 			const uint8_t frame_type = rx_frame.data[0] & 0xF0;
-			if (frame_type == 0x10)
+			if (frame_type == 0x10 || frame_type == 0x50) // it can be Abit Ecu which supports fc-less mode
 			{
 				// This is a first frame
 				// Send a flow control response so we can get the remaining frames
@@ -1033,11 +1033,11 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 				rx_frame_data_length = 7;
 
 				rx_frame.data[0] |= 0x40;
-				sendControlFrame = true;
+				sendControlFrame = (frame_type == 0x10);
 				const uint16_t expectedLength = ((0x0F & rx_frame.data[0]) << 8 | rx_frame.data[1]);
 				req_expected_rsp = (uint8_t)(expectedLength / 7) + 1;
 			}
-			else if (frame_type == 0x20)
+			else if (frame_type == 0x20 || frame_type == 0x60) // it can be Abit Ecu which supports fc-less mode
 			{
 				// This is a consecutive frame
 				// Sequence index of the frame is 0x0F & data[0]
@@ -1055,6 +1055,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 			else if (frame_type == 0x30)
 			{
 				if (fc_less_mode) {
+					//ESP_LOGW(TAG, "skip CanTP CF (%s)", (req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp) ? "ok" : "fail");
 					assert(req_expected_rsp != 0xFF && req_expected_rsp == number_of_rsp);
 					break;
 				}
@@ -1129,13 +1130,16 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 				break;
 			}
 
-			static const uint8_t BS_MAX = RX_QUEUE_LENGTH + 1; // esp32-can fails to receive more then (.rx_queue_len + 1) simultaneous CAN messages
+			static const uint8_t BS_MAX = 0xFF; // RX_QUEUE_LENGTH + 1; // esp32-can fails to receive more then (.rx_queue_len + 1) simultaneous CAN messages
 			if (sendControlFrame && ((number_of_rsp - 1) % BS_MAX) == 0) {
 				memset(txframe->data, 0xAA, 8);
 
 				txframe->data[0] = 0x30;
 				txframe->data[1] = BS_MAX;
 				txframe->data[2] = 0x00; // zero duration between two consecutive frames
+
+				rx_frame.data[3] = 0x01; // don't send nor wait for FC frames (Abit specific)
+				rx_frame.data[4] = ~rx_frame.data[3];
 
 				if (can_tx_task(txframe) != ESP_OK) {
 					elm327_response("CAN ERROR\r>", 0, queue);
@@ -1150,7 +1154,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 			if (elapsedMs >= totalMs) {
 				ESP_LOGW(TAG, "response timeout = %lu ms", elapsedMs);
 
-				if (rsp_found == 0) {
+				if (!rsp_found) {
 					strcat(rsp, "NO DATA");
 				}
 				strcat(rsp, "\r>");
