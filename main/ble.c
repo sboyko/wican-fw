@@ -525,7 +525,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
                                         esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
-	static xdev_buffer rx_buffer;
+	xdev_buffer rx_buffer;
     ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_event = %d", event);
 
     switch (event) {
