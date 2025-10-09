@@ -25,7 +25,7 @@
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-//#include "esp_log.h"
+#include "esp_log.h"
 #include "driver/uart.h"
 #include "string.h"
 #include "driver/gpio.h"
@@ -66,7 +66,11 @@ static void setup_uart_usb(int baudRate)
     };
     // We won't use a buffer for sending data.
     //uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
-	uart_driver_install(uart_num, RX_BUF_SIZE * 4, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED);
+    int ret = uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED);
+	if (ret != ESP_OK) {
+        ESP_LOGE(__func__, "uart_driver_install() fails (%d)", ret);
+    }
+
     uart_param_config(uart_num, &uart_config);
 
     // // Enable UART RX FIFO full threshold interrupts
@@ -100,10 +104,10 @@ static void uart_rx_task(void *arg)
     char ws_data[DEV_BUFFER_LENGTH * 2];
 
     UartMode uart_mode = UART_KLINE;
-    int uart_baud = 0;
+    int uart_baud = USB_UART_BAUDRATE;
 
     int failed_waits = 0;
-    int wait_ms = 1;
+    int wait_ms = 2;
 
     while (true) {
         if (uart_mode == UART_KLINE 
@@ -157,7 +161,7 @@ static void uart_rx_task(void *arg)
 			}
         }
 
-        while(xQueueReceive(uart0_queue, &event, pdMS_TO_TICKS(wait_ms))) {
+        while (xQueueReceive(uart0_queue, &event, pdMS_TO_TICKS(wait_ms))) {
             if (event.type == UART_DATA && event.size > 0) { // got new data
                 failed_waits = 0;
 
@@ -174,15 +178,14 @@ static void uart_rx_task(void *arg)
                         break;
                     }
                     if (uart_mode == UART_KLINE) {
-                        xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(1));
+                        xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(2));
                     } else {
-                        xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(1));
+                        xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(2));
                     }
                     offset += io_buffer.usLen;
                 }
 
-                vTaskDelay(pdMS_TO_TICKS(1));
-                
+                vTaskDelay(pdMS_TO_TICKS(1)); // give a chance for CAN to process incoming commands
                 break;
             }
             // else if (event.type == UART_BUFFER_FULL || event.type == UART_FIFO_OVF) {
@@ -191,7 +194,7 @@ static void uart_rx_task(void *arg)
             // }
         }
         
-        wait_ms = (++failed_waits > 2000) ? RX_QUEUE_WAIT_TIME_MS : 1;
+        wait_ms = (++failed_waits > 1000) ? RX_QUEUE_WAIT_TIME_MS : 2;
     }
 }
 
@@ -225,6 +228,8 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
 	xuart_rx_queue = xRXp_Queue;
     kline_rx_queue = kLineRX_Queue;
     led_kline = kline_led;
+
+    setup_uart_usb(USB_UART_BAUDRATE);
 
     // Note: looks like one task is faster then two separate tasks
     //

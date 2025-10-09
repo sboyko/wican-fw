@@ -395,19 +395,16 @@ static bool ble_tx_ready()
 }
 static void ble_send(uint8_t* buf, uint8_t buf_len, int charactValueIndex)
 {
-	//if(ble_tx_ready())
-	//{
-		const esp_err_t result = esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, profile_handle_table[charactValueIndex], buf_len, buf, false);
-		if (result != ESP_OK) {
-			ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
-		} else {
+	const esp_err_t result = esp_ble_gatts_send_indicate(spp_gatts_if, spp_conn_id, profile_handle_table[charactValueIndex], buf_len, buf, false);
+	if (result != ESP_OK) {
+		ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
+	} else {
 #ifndef NDEBUG
-			ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
+		ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
 #endif
-		}
+	}
 
-		vTaskDelay(pdMS_TO_TICKS(5)); // prevents Message Integrity Check (MIC) failure (reason = 0x3d)
-	//}
+	vTaskDelay(pdMS_TO_TICKS(3)); // prevents Message Integrity Check (MIC) failure (reason = 0x3d)
 }
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
@@ -567,7 +564,10 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 				while (offset < param->write.len) {
 					rx_buffer.usLen = MIN(param->write.len - offset, sizeof(rx_buffer.ucElement));
 					memcpy(rx_buffer.ucElement, param->write.value + offset, rx_buffer.usLen);
-					xQueueSend(*xBle_RX_Queue, &rx_buffer, portMAX_DELAY );
+					if (xQueueSend(*xBle_RX_Queue, &rx_buffer, pdMS_TO_TICKS(50)) != pdTRUE) {
+						ESP_LOGW(GATTS_TABLE_TAG, "BLE rx_queue overflow, tx_queue = %d", uxQueueMessagesWaiting(*xBle_TX_Queue));
+						break;
+					}
 					offset += rx_buffer.usLen;
 				}
 
@@ -577,8 +577,12 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 					const esp_err_t result = esp_ble_gatts_send_response(gatts_if, param->write.conn_id, param->write.trans_id, ESP_GATT_OK, &rsp);
 					if (result != ESP_OK) {
 						ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_response(tx) fails: %d", result);
+					} else {
+						ESP_LOGW(GATTS_TABLE_TAG, "respose sent");
 					}
 				}
+
+				vTaskDelay(pdMS_TO_TICKS(1));
             }
             else if(profile_handle_table[IDX_VALUE_BLE_STATUS] == param->write.handle)
             {
@@ -653,13 +657,18 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 			// The Message Integrity Check (MIC) is a 4-bytes extra field added to the BLE packet when encryption is enabled. 
 			//
             ESP_LOGW(GATTS_TABLE_TAG, "ESP_GATTS_DISCONNECT_EVT, disconnect reason 0x%x", param->disconnect.reason);
-            wifi_network_restart();
-        	config_server_restart();
-            //is_connected = false;
-            gpio_set_level(conn_led, 1);
-            /* start advertising again when missing the connect */
-            esp_ble_gap_start_advertising(&heart_rate_adv_params);
+
 			clear_perm_commands(true);
+            //is_connected = false;
+			xEventGroupClearBits(s_ble_event_group, BLE_CONNECTED_BIT);
+            gpio_set_level(conn_led, 1);
+
+			wifi_network_restart();
+        	config_server_restart();
+            /* start advertising again when missing the connect */
+            if (esp_ble_gap_start_advertising(&heart_rate_adv_params) != ESP_OK) {
+				ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gap_start_advertising() fails");
+			}
             break;
         case ESP_GATTS_OPEN_EVT:
             break;
@@ -741,26 +750,18 @@ static void ble_task(void *pvParameters)
 
 	while(1)
 	{
-		//		ESP_LOGI(GATTS_TABLE_TAG, "wait BLE_CONNECTED_BIT");
-				xEventGroupWaitBits(s_ble_event_group,
-									BLE_CONNECTED_BIT,
-									pdFALSE,
-									pdFALSE,
-									portMAX_DELAY);
-		//		ESP_LOGI(GATTS_TABLE_TAG, "BLE_CONNECTED_BIT");
-
-				xQueuePeek(*xBle_TX_Queue, ( void * ) &tx_buffer, portMAX_DELAY);
-		//		memcpy(ble_send_buf, tx_buffer.ucElement, tx_buffer.usLen);
-		//		ble_send_buf_len = tx_buffer.usLen;
+wait_ble:
 				xEventGroupWaitBits(s_ble_event_group,
 									BLE_CONNECTED_BIT,
 									pdFALSE,
 									pdFALSE,
 									portMAX_DELAY);
 
+				xQueuePeek(*xBle_TX_Queue, &tx_buffer, portMAX_DELAY);
 
-				while(!ble_tx_ready()) {
+				if (!ble_tx_ready()) {
 					vTaskDelay(pdMS_TO_TICKS(1));
+					goto wait_ble;
 				}
 
 				int free_packet = esp_ble_get_cur_sendable_packets_num(spp_conn_id);

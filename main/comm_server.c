@@ -211,7 +211,7 @@ wait_skt_tx:
 	ESP_LOGI(TAG, "Socket connected...");
 	while(1)
 	{
-		if (xQueueReceive(*xTX_Queue, &tx_buffer, pdMS_TO_TICKS(10)) != pdTRUE) {
+		if (xQueueReceive(*xTX_Queue, &tx_buffer, portMAX_DELAY) != pdTRUE) {
 			continue;
 		}
 

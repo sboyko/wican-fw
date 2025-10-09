@@ -167,7 +167,7 @@ bool host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 		memcpy(xsend_buffer.ucElement, str + offset, xsend_buffer.usLen);
 		if (xQueueSend( *q, &xsend_buffer, RESPONSE_TICKS ) != pdTRUE) {
 			ESP_LOGE(TAG, "xQueueSend() fails");
-			assert(false);
+			//assert(false);
 			return false;
 		}
 		offset += xsend_buffer.usLen;
@@ -327,7 +327,7 @@ static void can_rx_task(void *pvParameters)
 					host_tx_failed_waits = 0;
 					if (xQueueSend( *txQueue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
 						ESP_LOGE(TAG, "xQueueSend() fails");
-						assert(false);
+						//assert(false);
 					}
 				}
 			}
@@ -389,9 +389,9 @@ void app_main(void)
 	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
 	gpio_set_level(PWR_LED_GPIO_NUM, 1);
 
-    xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) );
-    xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) );
-    xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
+    xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) ); // common RX queue
+    xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) ); // TCP TX queue
+    xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // WS TX queue
 
 	esp_ota_mark_app_valid_cancel_rollback();
 
@@ -508,7 +508,7 @@ void app_main(void)
     if(config_server_get_ble_config())
     {
     	int pass = config_server_ble_pass();
-    	xmsg_ble_tx_queue = xQueueCreate(96, sizeof( xdev_buffer) );
+    	xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
     	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, pass, &ble_uid[0]);
     }
 
@@ -526,8 +526,8 @@ void app_main(void)
         	project_hardware_rev = WICAN_USB_V100;
         	ESP_LOGI(TAG, "project_hardware_rev: USB");
 
-			xmsg_uart_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) );
-			xmsg_uart_rx_queue = xQueueCreate(32, sizeof( xdev_buffer) );
+			xmsg_uart_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) ); // USB / K-Line TX queue
+			xmsg_uart_rx_queue = xQueueCreate(16, sizeof( xdev_buffer) ); // K-Line RX queue
        		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, CONNECTED_LED_GPIO_NUM, PWR_LED_GPIO_NUM);
 			
 			elm327_uart_init(&xmsg_uart_tx_queue, &xmsg_uart_rx_queue);

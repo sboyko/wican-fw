@@ -85,11 +85,10 @@ typedef struct __xelm327_config
 
 
 static const uint8_t CMD_LENGTH = 17; // Single Frame + 1 byte for 'req_expected_rsp'
-static char cmd_response[128]; // solely for CAN processing
-
 #define KWP_COMMAND_LENGHT 260 // maximum KWP message length in bytes (including header and CS)
 
 static _xelm327_config_t elm327_config;
+static bool elm327_waiting_answer = false;
 
 static void elm327_set_default_config(bool reset_protocol)
 {
@@ -166,7 +165,7 @@ static esp_err_t can_tx_task(twai_message_t *message)
 	esp_err_t result = can_send(message, one_ms);
 	while (result != ESP_OK) {
 		if ((result == ESP_FAIL || result == ESP_ERR_TIMEOUT) && --retry_count >= 0) {
-			ESP_LOGE(TAG, "can_send() fails (repeat) , reason = 0x%04X", result);
+			//ESP_LOGW(TAG, "can_send() fails (repeat) , reason = 0x%04X", result);
 			vTaskDelay(one_ms);
 		} else {
 			ESP_LOGE(TAG, "can_send() fails (skip) , reason = 0x%04X", result);
@@ -885,7 +884,7 @@ static void uds_rps_rx_size_send(char *rsp, QueueHandle_t *queue, int (*fnHasNew
 	const int rx_size_round = (rx_size / 10) * 10;
 
 	if (elm327_config.uds_rps_last_rx_size == -1) {
-		if (rx_size < lower_bound) {
+		if (rx_size < WICAN_RX_QUEUE_SIZE / 12) {
 			return; // wait till queue will be initially filled
 		}
 	}
@@ -904,15 +903,15 @@ static void uds_rps_rx_size_send(char *rsp, QueueHandle_t *queue, int (*fnHasNew
 		elm327_response(rsp, 0, queue);
 
 		elm327_config.uds_rps_last_rx_size = rx_size_round;
+
+		//ESP_LOGW(TAG, "rx_queue=%d , tx_queue=%d", fnHasNewData(), uxQueueMessagesWaiting(*queue));
 	}
 }
 
-static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)());
+static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)());
 
-/*__attribute__((optimize("O0")))*/ static int8_t elm327_request(const char *cmd, const size_t cmd_len, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)())
+/*__attribute__((optimize("O0")))*/ static void elm327_request(const char *cmd, const size_t cmd_len, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)())
 {
-	//static int rsp_nowait_count = 0;
-	
 	twai_message_t txframe;
 	txframe.identifier = elm327_get_identifier();
 	txframe.extd = elm327_config.protocol == '7' || elm327_config.protocol == '9';
@@ -951,7 +950,7 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 		// FIXME: this should use the linefeed setting and match the number of
 		// `\r`s that are normally sent.
 		elm327_response("?\r>", 0, queue);
-		return 0;
+		return;
 	}
 	else
 	{
@@ -967,27 +966,22 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 		}
 	}
 
+	elm327_waiting_answer = true;
 	if (can_tx_task(&txframe) != ESP_OK) {
 		if (req_expected_rsp != 0 && req_expected_rsp != 0xFF) {
+			elm327_waiting_answer = false;
 			elm327_response("CAN ERROR\r>", 0, queue);
-			return 0;
+			return;
 		}
 	}
 
-	if (req_expected_rsp == 0) {
-		// rsp_nowait_count += 1;
-		// if (rsp_nowait_count >= TX_QUEUE_LENGTH) {
-		// 	rsp_nowait_count = 0;
-		// 	vTaskDelay(pdMS_TO_TICKS(1));
-		// }
-		return 0;
+	if (req_expected_rsp != 0) {
+		elm327_request_wait_answer(req_expected_rsp, &txframe, fc_less_mode, rsp, queue, fnHasNewData);
 	}
-	// rsp_nowait_count = 0;
-
-	return elm327_request_wait_answer(req_expected_rsp, &txframe, fc_less_mode, rsp, queue, fnHasNewData);
+	elm327_waiting_answer = false;
 }
 
-static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)())
+static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t *txframe, bool fc_less_mode, char *rsp, QueueHandle_t *queue, int (*fnHasNewData)())
 {
 	TickType_t totalMs = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;
 	const int64_t txtime = esp_timer_get_time();
@@ -1168,8 +1162,6 @@ static int8_t elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_
 			}
 		}
 	}
-
-	return 0;
 }
 
 static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
@@ -1181,7 +1173,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 		return;
 	}
 
-	static char rsp[KWP_COMMAND_LENGHT];
+	char rsp[KWP_COMMAND_LENGHT];
 	elm327_fill_data_from_hex_str(cmd, (uint8_t *) rsp, kwp_bytes_count);
 
 	// clear incoming queue
@@ -1476,6 +1468,20 @@ static char* elm327_ping(const char* command_str)
 	return (char*)ok_str;
 }
 
+static void printRamUsage(char *buf)
+{
+	multi_heap_info_t info = {0};
+	heap_caps_get_info(&info, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // internal RAM, memory capable to store data or to create new task
+	// info.total_free_bytes;   // total currently free in all non-continues blocks
+	// info.minimum_free_bytes;  // minimum free ever
+	// info.largest_free_block;   // largest continues block to allocate big array
+
+	// ESP_LOGW("TAG", "total_free_bytes = %d , minimum_free_bytes = %d , largest_free_block = %d",
+	//     info.total_free_bytes, info.minimum_free_bytes, info.largest_free_block);
+
+	sprintf(buf, "(free: %d , min_free: %d)", info.total_free_bytes, info.minimum_free_bytes);
+}
+
 
 const xelm327_cmd_t elm327_commands[] = {
 											{"spc", elm327_special_send},//special send (Abit specific - should be the first in the list)
@@ -1525,6 +1531,7 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 	// call will keep add to the cmd_buffer until the ending CR is found.
 	static char cmd_buffer[KWP_COMMAND_LENGHT * 2 + 5]; // maximum KWP message (2 hex digits for each byte) + 'kwp' prefix + '\r'
 	static uint16_t cmd_len = 0;
+	char cmd_response[64];
 
 	for(int i = 0; i < len; i++)
 	{
@@ -1551,6 +1558,9 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 						if(ret_ptr != 0)
 						{
 							strcat(cmd_response, ret_ptr);
+							if (!strncmp(cmd_buffer+2, "ws", 2)) {
+								printRamUsage(cmd_response + strlen(cmd_response));
+							}
 							cmd_found_flag = 1;
 							ESP_LOGI(TAG, "cmd: %s, rsp: %s", elm327_commands[j].command, cmd_response);
 							break;
@@ -1598,7 +1608,7 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 			{
 				if ((cmd_len % CMD_LENGTH) != 0) {
 					ESP_LOGE(TAG, "cmd_len fail, len = %d, data = '%s'", cmd_len, cmd_buffer);
-					assert(false);
+					//assert(false);
 				}
 
 				for (uint16_t j = 0; j + CMD_LENGTH <= cmd_len; j += CMD_LENGTH) {
@@ -1640,14 +1650,26 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 
 int8_t elm327_process_can_frame(const uint8_t *buf, twai_message_t *frame)
 {
-	// Let elm327.c decide which messages to process
-	if (elm327_should_receive(frame)) {
+	const bool isElmFrame = elm327_should_receive(frame);
+	bool printFame = false;
+
+	// Let elm327 decide which messages to process
+	if (isElmFrame) {
 		if( elm327_can_log != NULL) {
 			elm327_can_log(frame, ELM327_CAN_RX);
 		}
-		xQueueSend(can_rx_queue, frame, portMAX_DELAY);
+
+		if (elm327_waiting_answer) {
+			xQueueSend(can_rx_queue, frame, portMAX_DELAY);
+		} else {
+			printFame = true;
+		}
 	}
 	else if (elm327_config.monitor_all) {
+		printFame = true;
+	}
+
+	if (printFame) {
 		char* rsp = (char*)buf;
 		int offset = elm327_print_canid(rsp, frame);
 
@@ -1657,9 +1679,12 @@ int8_t elm327_process_can_frame(const uint8_t *buf, twai_message_t *frame)
 		strcat(rsp, "\r");
 		offset += 1;
 
+		if (isElmFrame) {
+			ESP_LOGW(TAG, "CanTp: %s", rsp);
+		}
+
 		return offset;
 	}
-	
 	return 0;
 }
 

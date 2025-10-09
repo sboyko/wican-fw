@@ -171,6 +171,8 @@ void wifi_network_restart(void)
         return;
     }
     esp_wifi_connect();
+
+    ESP_LOGW(WIFI_TAG, "WiFi restarted");
 }
 bool wifi_network_is_connected(void)
 {

@@ -1578,6 +1578,7 @@ void config_server_restart(void)
 {
 	if (server == NULL) {
 		server = config_httpd_start();
+		ESP_LOGW(TAG, "Webserver restarted");
 	}
 }
 void config_server_stop(void)
