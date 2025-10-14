@@ -185,6 +185,24 @@ int fnHasNewData()
 	return uxQueueMessagesWaiting(xMsg_Rx_Queue);
 }
 
+static void assignHostTxQueue(QueueHandle_t* const queue)
+{
+	QueueHandle_t* const old_txQueue = host_txQueue;
+	host_txQueue = queue;
+
+	if (config_server_get_ble_config()) {
+		if (old_txQueue != host_txQueue) {
+			if (old_txQueue == &xmsg_uart_tx_queue && host_txQueue == NULL) {
+				ble_enable();
+				ESP_LOGW(TAG, "enable ble");
+			} else if (host_txQueue == &xmsg_uart_tx_queue) {
+				ble_disable();
+				ESP_LOGW(TAG, "disable ble");
+			}
+		}
+	}
+}
+
 static void host_rx_task(void *pvParameters)
 {
 	xdev_buffer ucTCP_RX_Buffer;
@@ -194,10 +212,17 @@ static void host_rx_task(void *pvParameters)
 	{
 		const uint8_t perm_delay = (protocol == OBD_ELM327 ? elm327_perm_delay() : 0);
 
+		/**
+		 * modes:
+		 * - normal (recv-send)
+		 * - perm_commands (send), ping_5s (for recv)
+		 * - monitor (send), ping_5s (for recv)
+		 * - bulk (recv), idle_cmd (for missed recv)
+		 */
 		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
 			if (esp_timer_get_time() - rx_time > 10*1000*1000) {
 				if (host_txQueue) {
-					//host_txQueue = NULL;
+					//assignHostTxQueue(NULL);
 					//clear_perm_commands(true);
 					//ble_disconnect();
 
@@ -206,18 +231,20 @@ static void host_rx_task(void *pvParameters)
 			}
 
 			bool hasCommand = false;
-			if (perm_delay > 0 && host_txQueue) {
-				hasCommand = elm327_process_perm_cmd(&ucTCP_RX_Buffer);
-			} else if (esp_timer_get_time() - rx_time > 3*1000*1000) {
-				if (elm327_process_idle_cmd(&ucTCP_RX_Buffer)) {
-					hasCommand = true;
-					rx_time = esp_timer_get_time();
+			if (host_txQueue) {
+				if (perm_delay > 0) {
+					hasCommand = elm327_process_perm_cmd(&ucTCP_RX_Buffer);
+				} else if (esp_timer_get_time() - rx_time > 3*1000*1000) {
+					if (elm327_process_idle_cmd(&ucTCP_RX_Buffer)) { // send idle_cmd in case 'bulk' mode in on
+						hasCommand = true;
+						rx_time = esp_timer_get_time();
+					}
 				}
 			}
 
 			if (!hasCommand) {
-				if (++host_tx_failed_waits > 400) {
-					host_txQueue = NULL;
+				if (++host_tx_failed_waits > 400) { // no perm/monitor commands for 6s
+					assignHostTxQueue(NULL);
 				}
 				continue;
 			}
@@ -235,13 +262,13 @@ static void host_rx_task(void *pvParameters)
 		int temp_len = ucTCP_RX_Buffer.usLen;
 
 		if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI) {
-			host_txQueue = &xMsg_Tx_Queue;
+			assignHostTxQueue(&xMsg_Tx_Queue);
 		} else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE) {
-			host_txQueue = &xmsg_ble_tx_queue;
+			assignHostTxQueue(&xmsg_ble_tx_queue);
 		} else if(ucTCP_RX_Buffer.dev_channel == DEV_UART) {
-			host_txQueue = &xmsg_uart_tx_queue;
+			assignHostTxQueue(&xmsg_uart_tx_queue);
 		} else { // if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS) {
-			host_txQueue = &xmsg_ws_tx_queue;
+			assignHostTxQueue(&xmsg_ws_tx_queue);
 		}
 
 		if(protocol == OBD_ELM327)

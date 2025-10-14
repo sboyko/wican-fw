@@ -551,26 +551,13 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             }
             break;
         case ESP_GATTS_WRITE_EVT:
-#ifndef NDEBUG		
+#ifndef NDEBUG
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT, write value:");
             esp_log_buffer_hex(GATTS_TABLE_TAG, param->write.value, param->write.len);
 #endif
 
             if(profile_handle_table[IDX_VALUE_COMM_TX] == param->write.handle)
             {
-				rx_buffer.dev_channel = DEV_BLE;
-
-				int offset = 0;
-				while (offset < param->write.len) {
-					rx_buffer.usLen = MIN(param->write.len - offset, sizeof(rx_buffer.ucElement));
-					memcpy(rx_buffer.ucElement, param->write.value + offset, rx_buffer.usLen);
-					if (xQueueSend(*xBle_RX_Queue, &rx_buffer, pdMS_TO_TICKS(50)) != pdTRUE) {
-						ESP_LOGW(GATTS_TABLE_TAG, "BLE rx_queue overflow, tx_queue = %d", uxQueueMessagesWaiting(*xBle_TX_Queue));
-						break;
-					}
-					offset += rx_buffer.usLen;
-				}
-
 				if (param->write.need_rsp) {
 					esp_gatt_rsp_t rsp = {0};
 					rsp.attr_value.handle = param->write.handle;
@@ -582,7 +569,22 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 					}
 				}
 
-				vTaskDelay(pdMS_TO_TICKS(1));
+				rx_buffer.dev_channel = DEV_BLE;
+
+				int offset = 0;
+				while (offset < param->write.len) {
+					rx_buffer.usLen = MIN(param->write.len - offset, sizeof(rx_buffer.ucElement));
+					memcpy(rx_buffer.ucElement, param->write.value + offset, rx_buffer.usLen);
+					if (xQueueSend(*xBle_RX_Queue, &rx_buffer, pdMS_TO_TICKS(20)) != pdTRUE) {
+						ESP_LOGW(GATTS_TABLE_TAG, "BLE rx_queue overflow, tx_queue = %d", uxQueueMessagesWaiting(*xBle_TX_Queue));
+#ifndef NDEBUG
+						rx_buffer.usLen = sprintf((char*)rx_buffer.ucElement, "overflow!!\r");
+						ble_send(rx_buffer.ucElement, rx_buffer.usLen, IDX_VALUE_COMM_RX);
+#endif
+						break;
+					}
+					offset += rx_buffer.usLen;
+				}
             }
             else if(profile_handle_table[IDX_VALUE_BLE_STATUS] == param->write.handle)
             {
@@ -747,6 +749,7 @@ static void ble_task(void *pvParameters)
 	xdev_buffer tx_buffer;
 	uint8_t ble_send_buf[BLE_ATT_DATA_MAX_SIZE];
 	uint32_t ble_send_buf_len = 0;
+	int rx_size = -1;
 
 	while(1)
 	{
@@ -757,7 +760,18 @@ wait_ble:
 									pdFALSE,
 									portMAX_DELAY);
 
-				xQueuePeek(*xBle_TX_Queue, &tx_buffer, portMAX_DELAY);
+				if (xQueuePeek(*xBle_TX_Queue, &tx_buffer, pdMS_TO_TICKS(5)) != pdTRUE) {
+					if (rx_size == -1) {
+						rx_size = elm327_rx_queue_size(xBle_RX_Queue);
+						if (rx_size == -1) {
+							continue;
+						}
+					} else {
+						rx_size = -1;
+					}
+				} else {
+					rx_size = -1;
+				}
 
 				if (!ble_tx_ready()) {
 					vTaskDelay(pdMS_TO_TICKS(1));
@@ -768,6 +782,13 @@ wait_ble:
 
 				if(free_packet && !(BLE_CONGEST_BIT & xEventGroupGetBits(s_ble_event_group)))
 				{
+					if (rx_size >= 0) {
+						char *buff = (char*) ble_send_buf;
+                        sprintf(buff, "WAIT_%d\r", rx_size);
+						ble_send(ble_send_buf, strlen(buff), IDX_VALUE_COMM_RX);
+						continue;
+					}
+
 					while(xQueuePeek(*xBle_TX_Queue, &tx_buffer, pdMS_TO_TICKS(2)))
 					{
 						// figure out how many packets are needed to send this tx_buffer

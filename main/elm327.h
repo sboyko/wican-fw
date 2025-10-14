@@ -37,6 +37,8 @@ void clear_perm_commands(bool close_monitor_all);
 int8_t elm327_process_can_frame(const uint8_t *buf, twai_message_t *frame);
 int elm327_print_canid(char *buff, twai_message_t *frame);
 
+int elm327_rx_queue_size(QueueHandle_t *rx_queue);
+
 void elm327_uart_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue);
 
 #endif

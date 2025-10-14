@@ -875,36 +875,44 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 	return (TickType_t)(((esp_timer_get_time() - txtime)/1000)/portTICK_PERIOD_MS);
 }
 
-static void uds_rps_rx_size_send(char *rsp, QueueHandle_t *queue, int (*fnHasNewData)())
+// API
+int elm327_rx_queue_size(QueueHandle_t *rx_queue)
 {
-	static const int lower_bound = WICAN_RX_QUEUE_SIZE / 2 - WICAN_RX_QUEUE_SIZE / 6;
-	static const int upper_bound = WICAN_RX_QUEUE_SIZE / 2 ;//+ WICAN_RX_QUEUE_SIZE / 12;
+	if (elm327_config.uds_rps_skip_size == 0) {
+		return -1;
+	}
 
-	const int rx_size = fnHasNewData();
+	const int rx_size = uxQueueMessagesWaiting(*rx_queue);
 	const int rx_size_round = (rx_size / 10) * 10;
 
 	if (elm327_config.uds_rps_last_rx_size == -1) {
-		if (rx_size < WICAN_RX_QUEUE_SIZE / 12) {
-			return; // wait till queue will be initially filled
+		if (rx_size_round < 10) {
+			return -1; // wait till queue will be initially filled
 		}
 	}
 
 	bool sendWait = false;
 	if (rx_size_round == 0 || rx_size_round == WICAN_RX_QUEUE_SIZE) {
-		sendWait = ((elm327_config.uds_rps_last_count % 5) == 0);
+		sendWait = ((elm327_config.uds_rps_last_count % 10) == 0);
 		elm327_config.uds_rps_last_count += 1;
-	} else if ((rx_size <= lower_bound || rx_size >= upper_bound) && elm327_config.uds_rps_last_rx_size != rx_size_round) {
+	} else if (elm327_config.uds_rps_last_rx_size != rx_size_round) {
 		sendWait = true;
 		elm327_config.uds_rps_last_count = 0;
 	}
 	
-	if (sendWait) {
-		sprintf(rsp, "WAIT_%d\r", rx_size_round);
-		elm327_response(rsp, 0, queue);
+	if (!sendWait) {
+		return -1;
+	}
 
-		elm327_config.uds_rps_last_rx_size = rx_size_round;
+	elm327_config.uds_rps_last_rx_size = rx_size_round;
+	return rx_size_round;
+}
 
-		//ESP_LOGW(TAG, "rx_queue=%d , tx_queue=%d", fnHasNewData(), uxQueueMessagesWaiting(*queue));
+static void close_skip_mode()
+{
+	if (elm327_config.uds_rps_skip_size > 0) {
+		elm327_config.uds_rps_skip_size = 0;
+		ESP_LOGW(TAG, "UDS skip mode is off");
 	}
 }
 
@@ -971,6 +979,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 		if (req_expected_rsp != 0 && req_expected_rsp != 0xFF) {
 			elm327_waiting_answer = false;
 			elm327_response("CAN ERROR\r>", 0, queue);
+			close_skip_mode();
 			return;
 		}
 	}
@@ -1079,7 +1088,6 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 				//ESP_LOGW(TAG, "skip response: %s", rsp);
 
 				if (rsp_complete) {
-					uds_rps_rx_size_send(rsp, queue, fnHasNewData);
 					break;
 				} else {
 					continue;
@@ -1137,6 +1145,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 
 				if (can_tx_task(txframe) != ESP_OK) {
 					elm327_response("CAN ERROR\r>", 0, queue);
+					close_skip_mode();
 					break;
 				}
 			}
@@ -1150,6 +1159,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 
 				if (!rsp_found) {
 					strcat(rsp, "NO DATA");
+					close_skip_mode();
 				}
 				strcat(rsp, "\r>");
 			
@@ -1182,6 +1192,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 	// send KWP message
 	if (!elm327_response(rsp, kwp_bytes_count, xuart_tx_queue)) {
 		elm327_response("kwp_send_fails_ CAN ERROR\r>", 0, q);
+		close_skip_mode();
 		return;
 	}
 
@@ -1213,6 +1224,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 				for (int i = 0, in = MIN(echo_length, xsend_buffer.usLen); i < in; ++i) {
 					if (rsp[echo_offset + i] != xsend_buffer.ucElement[i]) {
 						elm327_response("kwp_echo_mismatch_ CAN ERROR\r>", 0, q);
+						close_skip_mode();
 						return;
 					}
 				}
@@ -1260,9 +1272,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 						shouldSkip = (memcmp(elm327_config.uds_rps_skip_prefix, rps_prefix + headerSize, elm327_config.uds_rps_skip_size) == 0);
 					}
 
-					if (shouldSkip) {
-						uds_rps_rx_size_send(rsp, q, fnHasNewData);
-					} else {
+					if (!shouldSkip) {
 						strcat(rsp, "\r");
 						elm327_response(rsp, 0, q);
 					}
@@ -1292,6 +1302,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 						strcpy(rsp, (echo_length == kwp_bytes_count ? "kwp_no_echo_" : "kwp_incomplete_echo_"));
 					}
 					strcat(rsp, "NO DATA");
+					close_skip_mode();
 				}
 				strcat(rsp, "\r>");
 			
@@ -1384,6 +1395,7 @@ bool elm327_process_idle_cmd(xdev_buffer *rx_buffer)
 	}
 }
 
+// API
 uint8_t elm327_perm_delay()
 {
 	if (elm327_config.perm_cmd_count == 0) {
@@ -1392,6 +1404,7 @@ uint8_t elm327_perm_delay()
 	return MAX(elm327_config.perm_cmd_delay, 1);
 }
 
+// API
 void clear_perm_commands(bool close_monitor_all)
 {
 	if (elm327_config.perm_cmd_count != 0) {
@@ -1407,10 +1420,7 @@ void clear_perm_commands(bool close_monitor_all)
 			elm327_config.monitor_all = 0;
 			ESP_LOGW(TAG, "Monitor All is off");
 		}
-		if (elm327_config.uds_rps_skip_size > 0) {
-			elm327_config.uds_rps_skip_size = 0;
-			ESP_LOGW(TAG, "UDS skip mode is off");
-		}
+		close_skip_mode();
 	}
 }
 
@@ -1454,8 +1464,8 @@ static char* elm327_uds_response_skip(const char* command_str)
 
 static char* elm327_uds_response_all(const char* command_str)
 {
-	elm327_config.uds_rps_skip_size = 0;
-	
+	close_skip_mode();
+
 	return (char*)ok_str;
 }
 
@@ -1636,10 +1646,7 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 
 						elm327_response("\r>", 0, q);
 					}
-					if (elm327_config.uds_rps_skip_size > 0) {
-						elm327_config.uds_rps_skip_size = 0;
-						ESP_LOGW(TAG, "UDS skip mode is off");
-					}
+					close_skip_mode();
 				}
 			} else {
 				cmd_buffer[cmd_len++] = (char)tolower(buf[i]);

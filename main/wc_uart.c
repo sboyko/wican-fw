@@ -29,7 +29,7 @@
 #include "driver/uart.h"
 #include "string.h"
 #include "driver/gpio.h"
-#include "types.h"
+#include "elm327.h"
 #include "wc_uart.h"
 #include "hal/uart_hal.h"
 
@@ -39,7 +39,7 @@ typedef enum {
     UART_KLINE = 2,
 } UartMode;
 
-static const int USB_UART_BAUDRATE = 2400000;
+static const int USB_UART_BAUDRATE = 2400000; //460800
 static const int RX_BUF_SIZE = 1024;
 static const int RX_QUEUE_WAIT_TIME_MS = 15;
 
@@ -66,7 +66,7 @@ static void setup_uart_usb(int baudRate)
     };
     // We won't use a buffer for sending data.
     //uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
-    int ret = uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED);
+    int ret = uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
 	if (ret != ESP_OK) {
         ESP_LOGE(__func__, "uart_driver_install() fails (%d)", ret);
     }
@@ -108,6 +108,8 @@ static void uart_rx_task(void *arg)
 
     int failed_waits = 0;
     int wait_ms = 2;
+    int received_bytes = 0;
+    bool wait_mode = false;
 
     while (true) {
         if (uart_mode == UART_KLINE 
@@ -135,11 +137,10 @@ static void uart_rx_task(void *arg)
                 memcpy(ws_data + offset, io_buffer.ucElement, io_buffer.usLen);
                 offset += io_buffer.usLen;
 
-                if (xQueuePeek(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(0))
+                if (xQueuePeek(*xuart_tx_queue, &io_buffer, 0)
                         && offset + io_buffer.usLen < sizeof(ws_data)) {
                     if (xQueueReceive(*xuart_tx_queue, &io_buffer, 0) != pdTRUE) {
-                        //ESP_LOGE(TAG, "xQueueReceive() fails");
-                        assert(false);
+                        break;
                     }
                 } else {
                     break;
@@ -151,9 +152,6 @@ static void uart_rx_task(void *arg)
 			{
 				int written = uart_write_bytes(uart_num, ws_data + (offset - to_write), to_write);
 				if (written < 0) {
-                    //ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                    assert(false);
-
                     reset_uart(uart_baud);
                     break;
 				}
@@ -166,26 +164,45 @@ static void uart_rx_task(void *arg)
                 failed_waits = 0;
 
                 io_buffer.dev_channel = DEV_UART;
-                int offset = 0;
+                received_bytes += event.size;
 
+                int offset = 0;
                 while (offset < event.size) {
                     io_buffer.usLen = MIN(event.size - offset, sizeof(io_buffer.ucElement));
                     io_buffer.usLen = uart_read_bytes(uart_num, io_buffer.ucElement, io_buffer.usLen, 0);
-                    if (io_buffer.usLen < 0) {
-                        assert(false);
-
-                        reset_uart(uart_baud);
+                    if (io_buffer.usLen <= 0) {
+                        if (io_buffer.usLen < 0) {
+                            reset_uart(uart_baud);
+                        }
                         break;
                     }
+
                     if (uart_mode == UART_KLINE) {
-                        xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(2));
+                        xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
                     } else {
-                        xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(2));
+                        if (xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(1)) != pdTRUE) {
+#ifndef NDEBUG
+                            sprintf(ws_data, "overflow!!\r");
+                            uart_write_bytes(uart_num, ws_data, strlen(ws_data));
+#endif                            
+                            break;
+                        }
                     }
                     offset += io_buffer.usLen;
                 }
 
-                vTaskDelay(pdMS_TO_TICKS(1)); // give a chance for CAN to process incoming commands
+                if (uart_mode == UART_USB && received_bytes > RX_BUF_SIZE / 2) {
+                    received_bytes = 0;
+
+                    const int size = elm327_rx_queue_size(xuart_rx_queue);
+                    if (size >= 0) {
+                        sprintf(ws_data, "WAIT_%d\r", size);
+                        uart_write_bytes(uart_num, ws_data, strlen(ws_data));
+                        wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
+                    }
+                }
+
+                //vTaskDelay(pdMS_TO_TICKS(1)); // give a chance for CAN to process incoming commands
                 break;
             }
             // else if (event.type == UART_BUFFER_FULL || event.type == UART_FIFO_OVF) {
@@ -193,8 +210,19 @@ static void uart_rx_task(void *arg)
             //     break;
             // }
         }
+
+        if (wait_mode) {
+            const int size = elm327_rx_queue_size(xuart_rx_queue);
+            if (size >= 0) {
+                sprintf(ws_data, "WAIT_%d\r", size);
+                uart_write_bytes(uart_num, ws_data, strlen(ws_data));
+                wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
+
+                vTaskDelay(pdMS_TO_TICKS(1)); // prevents spamming
+            }
+        }
         
-        wait_ms = (++failed_waits > 1000) ? RX_QUEUE_WAIT_TIME_MS : 2;
+        wait_ms = (++failed_waits > 1500) ? RX_QUEUE_WAIT_TIME_MS : 2;
     }
 }
 
