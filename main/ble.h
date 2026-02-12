@@ -23,6 +23,7 @@
 
 void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, int passkey, uint8_t* uid);
 void ble_disconnect();
+void ble_restart_advertising();
 bool ble_connected(void);
 void ble_disable(void);
 void ble_enable(void);

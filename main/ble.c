@@ -1017,3 +1017,23 @@ void ble_disconnect()
 		esp_ble_gap_disconnect(conn_params.bda);
 	}
 }
+
+void ble_restart_advertising()
+{
+	esp_bt_controller_status_t status = esp_bt_controller_get_status();
+	if (status != ESP_BT_CONTROLLER_STATUS_ENABLED) {
+		return;
+	}
+
+	ESP_LOGW(GATTS_TABLE_TAG, "ble_restart_advertising");
+
+	if (esp_ble_gap_stop_advertising() != ESP_OK) {
+		ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gap_stop_advertising() fails");
+	}
+
+	vTaskDelay(pdMS_TO_TICKS(5));
+
+	if (esp_ble_gap_start_advertising(&heart_rate_adv_params) != ESP_OK) {
+		ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gap_start_advertising() fails");
+	}
+}

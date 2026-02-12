@@ -221,13 +221,19 @@ static void host_rx_task(void *pvParameters)
 		 */
 		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
 			if (esp_timer_get_time() - rx_time > 10*1000*1000) {
-				if (host_txQueue) {
+				if (host_txQueue) { // no 'ping' for over 10s (looks like AKM was abnormally terminated)
 					//assignHostTxQueue(NULL);
 					//clear_perm_commands(true);
 					//ble_disconnect();
 
 					esp_restart();
+				} else {
+					if (config_server_get_ble_config()) {
+						ble_restart_advertising();
+					}
 				}
+
+				rx_time = esp_timer_get_time();
 			}
 
 			bool hasCommand = false;
