@@ -89,7 +89,7 @@ typedef struct _device_config
 }device_config_t;
 
 
-void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, char * did);
+void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, char * did);
 void config_server_stop(void);
 int8_t config_server_get_wifi_mode(void);
 int8_t config_server_get_ap_ch(void);

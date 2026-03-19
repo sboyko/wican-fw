@@ -23,9 +23,9 @@
 #define __CAN_H__
 #include "driver/twai.h"
 
-#define TX_GPIO_NUM             	0
-#define RX_GPIO_NUM             	3
-#define CAN_STDBY_GPIO_NUM			6
+#define CAN_TX_GPIO_NUM         0
+#define CAN_RX_GPIO_NUM         3
+#define CAN_STDBY_GPIO_NUM      6
 
 // looks like the total sum (tx + rx) can't be greater than 14
 #define TX_QUEUE_LENGTH             1

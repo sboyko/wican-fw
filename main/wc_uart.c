@@ -47,7 +47,7 @@ static const uart_port_t uart_num = UART_NUM_0;
 
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL, *kline_rx_queue = NULL;
 static QueueHandle_t uart0_queue;
-static int led_kline = 0;
+static int led_kline = GPIO_NUM_NC; // not connected
 
 static int64_t uart_mode_time = 0;
 static UartMode request_uart_mode = UART_USB;
@@ -120,7 +120,7 @@ static void uart_rx_task(void *arg)
         if (uart_mode != request_uart_mode) {
             uart_mode = request_uart_mode;
             
-            gpio_set_level(led_kline, uart_mode == UART_KLINE ? 1 : 0);
+            gpio_set_level(led_kline, uart_mode == UART_KLINE ? 0 : 1);
         }
         if (uart_baud != request_uart_baud) {
             uart_baud = request_uart_baud;

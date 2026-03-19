@@ -76,9 +76,9 @@ static can_cfg_t can_cfg;
 	.alerts_enabled = TWAI_ALERT_TX_SUCCESS,  .clkout_divider = 0,        \
 	.intr_flags = ESP_INTR_FLAG_LEVEL1}
 
-static const twai_general_config_t g_config_normal = TWAI_GENERAL_CONFIG_DEFAULT_V2xx(0, TX_GPIO_NUM, RX_GPIO_NUM, TWAI_MODE_NORMAL);
-static const twai_general_config_t g_config_silent = TWAI_GENERAL_CONFIG_DEFAULT_V2xx(0, TX_GPIO_NUM, RX_GPIO_NUM, TWAI_MODE_LISTEN_ONLY);
-//static const twai_general_config_t g_config_no_ack = TWAI_GENERAL_CONFIG_DEFAULT(TX_GPIO_NUM, RX_GPIO_NUM, TWAI_MODE_NO_ACK);
+static const twai_general_config_t g_config_normal = TWAI_GENERAL_CONFIG_DEFAULT_V2xx(0, CAN_TX_GPIO_NUM, CAN_RX_GPIO_NUM, TWAI_MODE_NORMAL);
+static const twai_general_config_t g_config_silent = TWAI_GENERAL_CONFIG_DEFAULT_V2xx(0, CAN_TX_GPIO_NUM, CAN_RX_GPIO_NUM, TWAI_MODE_LISTEN_ONLY);
+//static const twai_general_config_t g_config_no_ack = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_GPIO_NUM, CAN_RX_GPIO_NUM, TWAI_MODE_NO_ACK);
 
 static twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 

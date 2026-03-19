@@ -54,17 +54,13 @@
 #include "ftp.h"
 
 #define TAG 		__func__
-#define TX_GPIO_NUM             	0
-#define RX_GPIO_NUM             	3
-#define BLE_EN_PIN_NUM				5
 
-#define PWR_LED_GPIO_NUM			7  // blue
-#define CONNECTED_LED_GPIO_NUM		8  // green
-#define ACTIVE_LED_GPIO_NUM			9  // yellow
+#define PWR_LED_GPIO_NUM            7  // blue (HL1 (USB/W) - dev_channel_t state (open/close))
+#define CONNECTED_LED_GPIO_NUM      8  // green (HL5 (CAN TR) - 0: on / 1: off)
+#define ACTIVE_LED_GPIO_NUM         9  // yellow (HL6 (CAN RX) - 0: on / 1: off)
+#define KLINE_GPS_LED_GPIO_NUM      10 // (HL2 (K-Line) / HL3 (GPS) - 0: KLine / 1: GPS)
 
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CONNECTED_LED_GPIO_NUM) | (1ULL<<ACTIVE_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM))
-#define BLE_EN_PIN_SEL		(1ULL<<BLE_EN_PIN_NUM)
-#define BLE_Enabled()		(!gpio_get_level(BLE_EN_PIN_NUM))
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CONNECTED_LED_GPIO_NUM) | (1ULL<<ACTIVE_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<KLINE_GPS_LED_GPIO_NUM))
 
 static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_mqtt_rx_queue;
 static QueueHandle_t xmsg_uart_rx_queue;
@@ -418,7 +414,7 @@ void app_main(void)
     //configure GPIO with the given settings
     gpio_config(&io_conf);
 
-	gpio_set_level(CONNECTED_LED_GPIO_NUM, 1);
+	gpio_set_level(CONNECTED_LED_GPIO_NUM, 0);
 	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
 	gpio_set_level(PWR_LED_GPIO_NUM, 1);
 
@@ -436,7 +432,7 @@ void app_main(void)
             derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
             derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
 	
-	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, (char*)&uid[0]);
+	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, (char*)&uid[0]);
 	slcan_init(&host_tx_task);
 
 	int8_t can_datarate = config_server_get_can_rate();
@@ -509,7 +505,7 @@ void app_main(void)
 		can_set_bitrate(can_datarate);
 		xmsg_mqtt_rx_queue = xQueueCreate(32, sizeof(mqtt_can_message_t) );
 		can_enable();
-		mqtt_init((char*)&uid[0], CONNECTED_LED_GPIO_NUM, &xmsg_mqtt_rx_queue);
+		mqtt_init((char*)&uid[0], PWR_LED_GPIO_NUM, &xmsg_mqtt_rx_queue);
 	}
 //	else if(protocol == MQTT)
 //	{
@@ -517,7 +513,7 @@ void app_main(void)
 //		can_init(CAN_500K);
 //		can_enable();
 //
-//		mqtt_init((char*)&uid[0], CONNECTED_LED_GPIO_NUM, &xmsg_mqtt_rx_queue);
+//		mqtt_init((char*)&uid[0], PWR_LED_GPIO_NUM, &xmsg_mqtt_rx_queue);
 //	}
 
 
@@ -531,18 +527,18 @@ void app_main(void)
 	}
 	if(config_server_get_port_type() == UDP_PORT)
 	{
-		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, 1);
+		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, 1);
 	}
 	else
 	{
-		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, 0);
+		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, 0);
 	}
 
     if(config_server_get_ble_config())
     {
     	int pass = config_server_ble_pass();
     	xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
-    	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, CONNECTED_LED_GPIO_NUM, pass, &ble_uid[0]);
+    	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, pass, &ble_uid[0]);
     }
 
 
@@ -561,7 +557,7 @@ void app_main(void)
 
 			xmsg_uart_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) ); // USB / K-Line TX queue
 			xmsg_uart_rx_queue = xQueueCreate(16, sizeof( xdev_buffer) ); // K-Line RX queue
-       		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, CONNECTED_LED_GPIO_NUM, PWR_LED_GPIO_NUM);
+       		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, PWR_LED_GPIO_NUM, KLINE_GPS_LED_GPIO_NUM);
 			
 			elm327_uart_init(&xmsg_uart_tx_queue, &xmsg_uart_rx_queue);
         }

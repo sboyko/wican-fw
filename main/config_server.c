@@ -76,7 +76,7 @@ static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static esp_websocket_client_handle_t ws_client = NULL;
 static bool ws_authenticated = false;
 
-static uint8_t ws_led;
+static int ws_led = GPIO_NUM_NC; // not connected
 
 httpd_handle_t server = NULL;
 char *device_config_file = NULL;
@@ -2022,7 +2022,7 @@ bool config_server_ws_connected(void)
 	return WS_HANDLER_CONNECTED_BIT == (xEventGroupGetBits(xServerEventGroup) & WS_HANDLER_CONNECTED_BIT);
 }
 
-void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, char * did)
+void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, char * did)
 {
     if (server == NULL)
     {

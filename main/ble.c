@@ -154,7 +154,7 @@ static esp_ble_adv_data_t heart_rate_scan_rsp_config = {
     .p_manufacturer_data = manufacturer,
 };
 
-static uint8_t conn_led = 0;
+static int conn_led = GPIO_NUM_NC; // not connected
 static EventGroupHandle_t s_ble_event_group = NULL;
 #define BLE_CONNECTED_BIT 			BIT0
 #define BLE_CONGEST_BIT				BIT1
@@ -878,11 +878,11 @@ bool ble_connected(void)
 }
 
 static uint32_t ble_pass_key = 0;
-void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, int passkey, uint8_t* uid)
+void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, int passkey, uint8_t* uid)
 {
 	esp_err_t ret;
 
-	if(conn_led == 0 && dev_name[0] == 0)
+	if(conn_led == GPIO_NUM_NC && dev_name[0] == 0)
 	{
 		strcpy((char*)dev_name, (char*)uid);
 		conn_led = connected_led;

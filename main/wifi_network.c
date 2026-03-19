@@ -28,7 +28,6 @@
 #include "esp_event.h"
 #include "esp_mac.h"
 #include "nvs_flash.h"
-#include "driver/gpio.h"
 #include "esp_log.h"
 #include <string.h>
 #include "comm_server.h"
@@ -52,7 +51,7 @@ static EventGroupHandle_t s_wifi_event_group = NULL;
 #define WIFI_DISCONNECTED_BIT      	BIT2
 #define WIFI_INIT_BIT     		 	BIT3
 #define WIFI_CONNECT_IDLE_BIT     	BIT4
-#define EXAMPLE_ESP_MAXIMUM_RETRY 	10
+
 char sta_ip[20] = {0};
 
 static const TickType_t connect_delay[] = {1000, 1000, 1000, 1000, 1000,1000};

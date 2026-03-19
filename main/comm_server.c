@@ -53,7 +53,7 @@ int listen_sock;
 static EventGroupHandle_t xSocketEventGroup;
 static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static SemaphoreHandle_t xTCP_Socket_Semaphore;
-static uint8_t conn_led = 0;
+static int conn_led = GPIO_NUM_NC; // not connected
 
 static uint8_t udp_enable = 0;
 
@@ -441,7 +441,7 @@ int8_t tcp_port_open(void)
 TaskHandle_t xserver_handle = NULL;
 TaskHandle_t xtx_handle = NULL;
 TaskHandle_t xrx_handle = NULL;
-int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t connected_led, uint8_t udp_en)
+int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, uint8_t udp_en)
 {
 	server_port = port;
 	xTX_Queue = xTXp_Queue;
