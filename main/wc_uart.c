@@ -39,9 +39,10 @@ typedef enum {
     UART_KLINE = 2,
 } UartMode;
 
-static const int USB_UART_BAUDRATE = 2400000; //460800
-static const int RX_BUF_SIZE = 1024;
-static const int RX_QUEUE_WAIT_TIME_MS = 15;
+static const int UART_USB_BAUDRATE = 2400000; //460800
+static const int UART_RX_BUF_SIZE = 1024;
+static const int RX_QUEUE_WAIT_TIME_MS = 10;
+#define KWP_COMMAND_LENGHT 260 // maximum KWP message length in bytes (including header and CS)
 
 static const uart_port_t uart_num = UART_NUM_0;
 
@@ -65,8 +66,8 @@ static void setup_uart_usb(int baudRate)
         .source_clk = UART_SCLK_APB,
     };
     // We won't use a buffer for sending data.
-    //uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
-    int ret = uart_driver_install(uart_num, RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
+    //uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
+    int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
 	if (ret != ESP_OK) {
         ESP_LOGE(__func__, "uart_driver_install() fails (%d)", ret);
     }
@@ -101,21 +102,21 @@ static void uart_rx_task(void *arg)
 {
 	xdev_buffer io_buffer;
     uart_event_t event;
-    char ws_data[DEV_BUFFER_LENGTH * 2];
+    char ws_data[KWP_COMMAND_LENGHT];
 
     UartMode uart_mode = UART_KLINE;
-    int uart_baud = USB_UART_BAUDRATE;
+    int uart_baud = UART_USB_BAUDRATE;
 
     int failed_waits = 0;
     int wait_ms = 2;
     int received_bytes = 0;
-    bool wait_mode = false;
+    bool uart_wait_mode = false;
 
     while (true) {
         if (uart_mode == UART_KLINE 
                 && (uart_mode_time == 0 || esp_timer_get_time() - uart_mode_time > 10*1000*1000)) {
             request_uart_mode = UART_USB;
-            request_uart_baud = USB_UART_BAUDRATE;
+            request_uart_baud = UART_USB_BAUDRATE;
         }
         if (uart_mode != request_uart_mode) {
             uart_mode = request_uart_mode;
@@ -129,7 +130,7 @@ static void uart_rx_task(void *arg)
             setup_uart_usb(uart_baud);
         }
 
-     	if (xQueueReceive(*xuart_tx_queue, &io_buffer, 0)) {
+     	if (xQueueReceive(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(uart_mode == UART_KLINE ? 1 : 0))) {
             failed_waits = 0;
 
             int offset = 0;
@@ -191,14 +192,14 @@ static void uart_rx_task(void *arg)
                     offset += io_buffer.usLen;
                 }
 
-                if (uart_mode == UART_USB && received_bytes > RX_BUF_SIZE / 2) {
+                if (uart_mode == UART_USB && received_bytes > UART_RX_BUF_SIZE / 2) {
                     received_bytes = 0;
 
                     const int size = elm327_rx_queue_size(xuart_rx_queue);
                     if (size >= 0) {
                         sprintf(ws_data, "WAIT_%d\r", size);
                         uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-                        wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
+                        uart_wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
                     }
                 }
 
@@ -211,18 +212,18 @@ static void uart_rx_task(void *arg)
             // }
         }
 
-        if (wait_mode) {
+        if (uart_wait_mode) {
             const int size = elm327_rx_queue_size(xuart_rx_queue);
             if (size >= 0) {
                 sprintf(ws_data, "WAIT_%d\r", size);
                 uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-                wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
+                uart_wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
 
                 vTaskDelay(pdMS_TO_TICKS(1)); // prevents spamming
             }
         }
         
-        wait_ms = (++failed_waits > 1500) ? RX_QUEUE_WAIT_TIME_MS : 2;
+        wait_ms = (++failed_waits > 1500) ? RX_QUEUE_WAIT_TIME_MS : (uart_mode == UART_KLINE ? 1 : 2);
     }
 }
 
@@ -239,7 +240,7 @@ static void uart_tx_task(void *arg)
             }
         }
 
-//    	rx_buffer.usLen = uart_read_bytes(uart_num, rx_buffer.ucElement, RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
+//    	rx_buffer.usLen = uart_read_bytes(uart_num, rx_buffer.ucElement, UART_RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
 //    	rx_buffer.dev_channel = DEV_UART;
 //    	if(rx_buffer.usLen > 0)
 //    	{
@@ -257,7 +258,7 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
     kline_rx_queue = kLineRX_Queue;
     led_kline = kline_led;
 
-    setup_uart_usb(USB_UART_BAUDRATE);
+    setup_uart_usb(UART_USB_BAUDRATE);
 
     // Note: looks like one task is faster then two separate tasks
     //
