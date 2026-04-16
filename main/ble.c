@@ -359,7 +359,7 @@ static void show_bonded_devices(void)
 
     ESP_LOGI(GATTS_TABLE_TAG, "Bonded devices list : %d", dev_num);
     for (int i = 0; i < dev_num; i++) {
-        esp_log_buffer_hex(GATTS_TABLE_TAG, (void *)&dev_list[i].bond_key, sizeof(esp_ble_bond_key_info_t));
+        ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, (void *)&dev_list[i].bond_key, sizeof(esp_ble_bond_key_info_t));
     }
 	ESP_LOGI(GATTS_TABLE_TAG, "");
 
@@ -492,7 +492,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         ESP_LOGD(GATTS_TABLE_TAG, "ESP_GAP_BLE_REMOVE_BOND_DEV_COMPLETE_EVT status = %d", param->remove_bond_dev_cmpl.status);
         ESP_LOGI(GATTS_TABLE_TAG, "ESP_GAP_BLE_REMOVE_BOND_DEV");
         ESP_LOGI(GATTS_TABLE_TAG, "-----ESP_GAP_BLE_REMOVE_BOND_DEV----");
-        esp_log_buffer_hex(GATTS_TABLE_TAG, (void *)param->remove_bond_dev_cmpl.bd_addr, sizeof(esp_bd_addr_t));
+        ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, (void *)param->remove_bond_dev_cmpl.bd_addr, sizeof(esp_bd_addr_t));
         ESP_LOGI(GATTS_TABLE_TAG, "------------------------------------");
         break;
     }

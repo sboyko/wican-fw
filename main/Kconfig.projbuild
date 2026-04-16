@@ -12,7 +12,3 @@ config ESP_WIFI_PASSWORD
     help
 	WiFi password (WPA or WPA2) for the example to use.
 endmenu
-
-config ESP_CONSOLE_UART_BAUDRATE
-    int
-    default 2400000

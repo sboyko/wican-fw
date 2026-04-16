@@ -17,5 +17,6 @@
         "ecc_dsa.h": "c",
         "*.inc": "c"
     },
-    "idf.pythonInstallPath": "C:\\Users\\STK\\.espressif\\tools\\idf-python\\3.11.2\\python.exe"
+    "idf.pythonInstallPath": "C:/python_3.11.2/python.exe",
+    "idf.currentSetup": "C:/Users/STK/esp/esp-idf-v5.5.4/"
 }
