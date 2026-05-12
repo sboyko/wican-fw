@@ -159,20 +159,24 @@ static esp_err_t can_tx_task(twai_message_t *message)
 		elm327_can_log(message, ELM327_CAN_TX);
 	}
 
+	// maximum send wait will be 30*3 + 2 = 92 ms
+	//
 	const TickType_t one_ms = pdMS_TO_TICKS(1);
-	int retry_count = 5;
+	const TickType_t send_wait_ms = one_ms * 3;
+	int retry_count = 3;
 
-	esp_err_t result = can_send(message, one_ms);
+	esp_err_t result = can_send(message, send_wait_ms);
 	while (result != ESP_OK) {
-		if ((result == ESP_FAIL || result == ESP_ERR_TIMEOUT) && --retry_count >= 0) {
+		if ((result == ESP_FAIL || result == ESP_ERR_TIMEOUT) && --retry_count > 0) {
 			//ESP_LOGW(TAG, "can_send() fails (repeat) , reason = 0x%04X", result);
 			vTaskDelay(one_ms);
 		} else {
-			ESP_LOGE(TAG, "can_send() fails (skip) , reason = 0x%04X", result);
+			ESP_LOGE(TAG, "can_send() fails (skip) , reason = 0x%04X , data [%02X %02X %02X %02X]",
+				result, message->data[0], message->data[1], message->data[2], message->data[3]);
 			break;
 		}
 		
-		result = can_send(message, one_ms);
+		result = can_send(message, send_wait_ms);
 	}
 	return result;
 }
@@ -1534,29 +1538,33 @@ const xelm327_cmd_t elm327_commands[] = {
 									};
 
 
-void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (*fnHasNewData)())
+void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q, int (*fnHasNewData)())
 {
 	// Because the cmd_buffer and cmd_len are static they keep their value
 	// across multiple calls. So if a buf is an incomplete command the next
 	// call will keep add to the cmd_buffer until the ending CR is found.
 	static char cmd_buffer[KWP_COMMAND_LENGHT * 2 + 5]; // maximum KWP message (2 hex digits for each byte) + 'kwp' prefix + '\r'
-	static uint16_t cmd_len = 0;
+	static uint16_t cmd_buffer_len = 0;
 	char cmd_response[64];
+
+	if (len > 4 && memcmp(buf, "AT WS", 5) == 0) {
+		cmd_buffer_len = 0;
+	}
 
 	for(int i = 0; i < len; i++)
 	{
-		assert(cmd_len + 1 < sizeof(cmd_buffer));
+		assert(cmd_buffer_len + 1 < sizeof(cmd_buffer));
 
-		if((buf[i] == '\r' && cmd_len > 0) || cmd_len + 1 >= sizeof(cmd_buffer))
+		if((buf[i] == '\r' && cmd_buffer_len > 0) || cmd_buffer_len + 1 >= sizeof(cmd_buffer))
 		{
-	//		ESP_LOGI(TAG, "end of command i: %d, cmd_len: %u", i, cmd_len);
-			cmd_buffer[cmd_len] = 0;
+	//		ESP_LOGI(TAG, "end of command i: %d, cmd_buffer_len: %u", i, cmd_buffer_len);
+			cmd_buffer[cmd_buffer_len] = 0;
 			cmd_response[0] = 0;
 			uint8_t cmd_found_flag = 0;
 
 			if(!strncmp(cmd_buffer, "kwp", 3))
 			{
-				elm327_kline_request(cmd_buffer + 3, cmd_len - 3, q, fnHasNewData);
+				elm327_kline_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
 			}
 			else if(!strncmp(cmd_buffer, "at", 2))
 			{
@@ -1608,7 +1616,7 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 					// would respond to the ATZ and the ATE0. When it does this,
 					// Carscanner gets out of sync: the Carscanner log shows the next
 					// command with a response from the previous command.
-					cmd_len = 0;
+					cmd_buffer_len = 0;
 
 					esp_restart();
 					break;
@@ -1616,12 +1624,12 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 			}
 			else // this is a request
 			{
-				if ((cmd_len % CMD_LENGTH) != 0) {
-					ESP_LOGE(TAG, "cmd_len fail, len = %d, data = '%s'", cmd_len, cmd_buffer);
+				if ((cmd_buffer_len % CMD_LENGTH) != 0) {
+					ESP_LOGE(TAG, "cmd_len fail, len = %d, data = '%s'", cmd_buffer_len, cmd_buffer);
 					//assert(false);
 				}
 
-				for (uint16_t j = 0; j + CMD_LENGTH <= cmd_len; j += CMD_LENGTH) {
+				for (uint16_t j = 0; j + CMD_LENGTH <= cmd_buffer_len; j += CMD_LENGTH) {
 					bool fc_less_mode = false;
 					if (cmd_buffer[j] == '5' || cmd_buffer[j] == '6') {
 						cmd_buffer[j] -= 4; // normalize Abit FC-less frames
@@ -1633,13 +1641,13 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 				}
 			}
 
-			cmd_len = 0;
+			cmd_buffer_len = 0;
 		}
 		else
 		{
 			if (isspace(buf[i])) {
 				// To stop monitoring, simply send space character to the ELM327, then wait for it to respond with a prompt character ('>')
-				if (cmd_len == 0) {
+				if (cmd_buffer_len == 0) {
 					if (elm327_config.monitor_all) {
 						elm327_config.monitor_all = 0;
 						ESP_LOGW(TAG, "Monitor All is off");
@@ -1649,7 +1657,8 @@ void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (
 					close_skip_mode();
 				}
 			} else {
-				cmd_buffer[cmd_len++] = (char)tolower(buf[i]);
+				cmd_buffer[cmd_buffer_len] = (char)tolower(buf[i]);
+				cmd_buffer_len += 1;
 			}
 		}
 	}

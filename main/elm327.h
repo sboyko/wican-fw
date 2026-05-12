@@ -29,7 +29,7 @@
 #define ELM327_CAN_TX   0x02
 
 void elm327_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type));
-void elm327_process_cmd(const uint8_t *buf, uint8_t len, QueueHandle_t *q, int (*fnHasNewData)());
+void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q, int (*fnHasNewData)());
 bool elm327_process_perm_cmd(xdev_buffer *rx_buffer);
 bool elm327_process_idle_cmd(xdev_buffer *rx_buffer);
 uint8_t elm327_perm_delay();
