@@ -65,7 +65,9 @@
 static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_mqtt_rx_queue;
 static QueueHandle_t xmsg_uart_rx_queue;
 static QueueHandle_t* host_txQueue = NULL;
-static int host_tx_failed_waits = 0;
+
+static int64_t host_rx_last_time = 0;
+static int64_t host_tx_last_time = 0; // last time we schedule send data to host
 
 static uint8_t protocol = SLCAN;
 static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(20);
@@ -173,6 +175,8 @@ bool host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 #endif
 	}
 
+	host_tx_last_time = esp_timer_get_time();
+
 	return true;
 }
 
@@ -245,7 +249,7 @@ static void host_rx_task(void *pvParameters)
 			}
 
 			if (!hasCommand) {
-				if (++host_tx_failed_waits > 400) { // no perm/monitor commands for 6s
+				if (esp_timer_get_time() - host_rx_last_time > 6*1000*1000) { // no perm/monitor commands for 6s
 					assignHostTxQueue(NULL);
 				}
 				continue;
@@ -254,7 +258,7 @@ static void host_rx_task(void *pvParameters)
 			rx_time = esp_timer_get_time();
 		}
 
-		host_tx_failed_waits = 0;
+		host_rx_last_time = esp_timer_get_time();
 
 #ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
@@ -311,8 +315,21 @@ static void can_rx_task(void *pvParameters)
     twai_message_t rx_msg;
 	mqtt_can_message_t mqtt_rx_msg;
 
-	while(1)
+	while(true)
 	{
+		/**
+		 * Acts so that WiCAN won't be silent for more than 500 ms
+		 */
+		QueueHandle_t* const txQueue = host_txQueue;
+		if(txQueue) {
+			if (esp_timer_get_time() - host_tx_last_time > 500*1000) { // no send to host for 0.5s
+				host_tx_task("\r", 1, txQueue);
+				
+				host_tx_last_time = esp_timer_get_time(); // prevents spamming
+			}
+		}
+
+
         if(can_receive(&rx_msg, pdMS_TO_TICKS(5)) == ESP_OK)
         {
 			// ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
@@ -353,10 +370,12 @@ static void can_rx_task(void *pvParameters)
 
 				if(ucTCP_TX_Buffer.usLen > 0)
 				{
-					host_tx_failed_waits = 0;
 					if (xQueueSend( *txQueue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
 						ESP_LOGE(TAG, "xQueueSend() fails");
 						//assert(false);
+					} else {
+						host_rx_last_time = esp_timer_get_time();
+						host_tx_last_time = esp_timer_get_time();
 					}
 				}
 			}
