@@ -261,12 +261,16 @@ void can_init(uint8_t bitrate)
 	{
 		xTimerStop( xCAN_EN_Timer, 0 );
 	}
+	
+	can_cfg.bus_state = OFF_BUS;
 
 	if(bitrate == CAN_AUTO)
 	{
 		can_cfg.auto_bitrate = 1;
-		can_cfg.bus_state = OFF_BUS;
-		can_set_bitrate(CAN_100K);
+	}
+	else
+	{
+		can_set_bitrate(bitrate);
 	}
 }
 

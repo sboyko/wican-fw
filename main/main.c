@@ -329,6 +329,10 @@ static void can_rx_task(void *pvParameters)
 			}
 		}
 
+		if (!can_is_enabled()) {
+			vTaskDelay(pdMS_TO_TICKS(10));
+			continue;
+		}
 
         if(can_receive(&rx_msg, pdMS_TO_TICKS(5)) == ESP_OK)
         {
@@ -410,6 +414,19 @@ static void can_rx_task(void *pvParameters)
 	}
 }
 
+static char* ensurePrintable(char* str, const int maxLength)
+{
+	for (int i = 0; i < maxLength; ++i) {
+		if (!isprint((int) str[i])) {
+			str[i] = 0;
+			break;
+		}
+	}
+
+	str[maxLength - 1] = 0;
+	return str;
+}
+
 static uint8_t derived_mac_addr[6] = {0};
 static uint8_t uid[33];
 static uint8_t ble_uid[33];
@@ -433,7 +450,7 @@ void app_main(void)
     //configure GPIO with the given settings
     gpio_config(&io_conf);
 
-	gpio_set_level(CONNECTED_LED_GPIO_NUM, 0);
+	gpio_set_level(CONNECTED_LED_GPIO_NUM, 1);
 	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
 	gpio_set_level(PWR_LED_GPIO_NUM, 1);
 
@@ -454,6 +471,7 @@ void app_main(void)
 	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, (char*)&uid[0]);
 	slcan_init(&host_tx_task);
 
+	/*
 	int8_t can_datarate = config_server_get_can_rate();
 	(can_datarate != -1) ? can_init(can_datarate):can_init(CAN_500K);
 
@@ -479,13 +497,15 @@ void app_main(void)
 	static twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 	can_set_filter(allPassFilter.acceptance_code);
 	can_set_mask(allPassFilter.acceptance_mask);
+	*/
+	can_init(CAN_100K); // one-time initialization, actual CAN bitrate will be set further
 
-	protocol = config_server_protocol();
-//	protocol = OBD_ELM327;
+	//protocol = config_server_protocol();
+	protocol = OBD_ELM327;
 
 	if(protocol == REALDASH)
 	{
-//		int can_datarate = config_server_get_can_rate();
+		int can_datarate = config_server_get_can_rate();
 		if(can_datarate != -1)
 		{
 			can_set_bitrate(can_datarate);
@@ -505,22 +525,24 @@ void app_main(void)
 	}
 	else if(protocol == OBD_ELM327)
 	{
-//		can_init(CAN_500K);
+		/*
 		can_set_bitrate(can_datarate);
 		can_enable();
+		*/
 		if(config_server_mqtt_en_config() && config_server_mqtt_elm327_log())
 		{
 			mqtt_elm327_log_en = config_server_mqtt_elm327_log();
-			elm327_init(&host_tx_task, log_can_to_mqtt);
+			elm327_init(&host_tx_task, log_can_to_mqtt, CONNECTED_LED_GPIO_NUM);
 		}
 		else
 		{
-			elm327_init(&host_tx_task, elm327_log_can);
+			elm327_init(&host_tx_task, elm327_log_can, CONNECTED_LED_GPIO_NUM);
 		}
 	}
 
 	if(config_server_mqtt_en_config())
 	{
+		int can_datarate = config_server_get_can_rate();
 		can_set_bitrate(can_datarate);
 		xmsg_mqtt_rx_queue = xQueueCreate(32, sizeof(mqtt_can_message_t) );
 		can_enable();
@@ -566,8 +588,8 @@ void app_main(void)
     esp_app_desc_t running_app_info;
     if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK)
     {
-        ESP_LOGI(TAG, "Running firmware version: %s", running_app_info.version);
-        ESP_LOGI(TAG, "Project Name: %s", running_app_info.project_name);
+        ESP_LOGI(TAG, "Running firmware version: %s", ensurePrintable(running_app_info.version, sizeof(running_app_info.version)));
+        ESP_LOGI(TAG, "Project Name: %s", ensurePrintable(running_app_info.project_name, sizeof(running_app_info.project_name)));
 
         if(strstr(running_app_info.project_name, "usb") != 0)
         {

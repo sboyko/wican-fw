@@ -36,6 +36,7 @@
 
 static QueueHandle_t can_rx_queue;
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL;
+static int terminalR_led = GPIO_NUM_NC; // not connected
 
 const char *ok_str = "OK";
 const char *question_mark_str = "?";
@@ -54,7 +55,7 @@ typedef struct __xelm327_config
 	uint32_t req_timeout;
 	uint32_t fc_header;
 	uint8_t fc_data[5];
-	uint8_t protocol;
+	//uint8_t protocol;
 	uint8_t priority_bits;
 	uint8_t fc_data_length:3;
 	uint8_t fc_mode:2;
@@ -70,6 +71,10 @@ typedef struct __xelm327_config
 	uint8_t allow_long_messages:1; // 'AT AL' command
 	uint8_t auto_formatting:1; // 'AT CAF0/CAF1' command
 	uint8_t monitor_all:1; // 'AT MA' command
+
+	uint8_t bitrate_index; // index like 'CAN_250K' in can.h
+	uint8_t extd: 1; // Extended Frame Format (29bit ID)
+	uint8_t terminal_resistor: 1; // on/off terminal resistor
 
 	uint8_t perm_cmd_count;
 	uint8_t perm_cmd_index;
@@ -110,7 +115,10 @@ static void elm327_set_default_config(bool reset_protocol)
 	// See reset_all for why this is optional
 	if (reset_protocol)
 	{
-		elm327_config.protocol = '6';
+		//elm327_config.protocol = '6';
+		elm327_config.bitrate_index = CAN_250K;
+		elm327_config.extd = 0;
+		elm327_config.terminal_resistor = 1;
 	}
 
 	elm327_config.req_timeout = 0x32; //50 ms
@@ -610,8 +618,29 @@ static char* elm327_set_fc_data(const char* command_str)
 	return (char*)ok_str;
 }
 
+static int bitrate_to_index(const int bitrate)
+{
+	switch (bitrate) {
+	case 1000000: return CAN_1000K;
+	case 800000: return CAN_800K;
+	case 500000: return CAN_500K;
+	case 250000: return CAN_250K;
+	case 125000: return CAN_125K;
+	case 100000: return CAN_100K;
+	case 50000: return CAN_50K;
+	case 25000: return CAN_25K;
+	case 20000: return CAN_20K;
+	case 10000: return CAN_10K;
+	case 5000: return CAN_5K;
+	default:
+		ESP_LOGE(TAG, "unexpected CAN bitrate: %d, 250K will be used", bitrate);
+		return CAN_250K;
+	}
+}
+
 static char* elm327_set_protocol(const char* command_str)
 {
+	/*
 	//Handle SPAx, and set it as x. 
 	//TODO: add support for auto sp
 	if(command_str[2] == 'a' || command_str[2] == 'A')
@@ -657,10 +686,44 @@ static char* elm327_set_protocol(const char* command_str)
 		can_enable();
 		vTaskDelay(pdMS_TO_TICKS(15));
 	}
+	*/
+
+	// restore spaces for sscanf
+	char *p = (char*)&command_str[2];
+	while ((p = strchr(p, '_')) != NULL) {
+		*p = ' ';
+	}
+
+	int bitrate = CAN_250K, extd = 0, terminalR = 1;
+	const int fieldCount = sscanf(&command_str[2], "%d %d %d", &bitrate, &extd, &terminalR); // considers length of 'sp'
+	if (fieldCount != 3) {
+		ESP_LOGE(TAG, "malformed SP command: %s", command_str);
+		return (char*)question_mark_str;
+	} else {
+		ESP_LOGI(TAG, "baud: %d, extd: %d, terminalR: %d", bitrate, extd, terminalR);
+	}
+
+	elm327_config.bitrate_index = bitrate_to_index(bitrate);
+	elm327_config.extd = extd;
+	elm327_config.terminal_resistor = terminalR;
+
+	can_disable();
+	vTaskDelay(pdMS_TO_TICKS(15));
+
+	can_set_bitrate(elm327_config.bitrate_index);
+	gpio_set_level(terminalR_led, elm327_config.terminal_resistor ? 0 : 1);
+
+	static twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+	can_set_filter(allPassFilter.acceptance_code);
+	can_set_mask(allPassFilter.acceptance_mask);
+
+	can_set_silent(0);
+
+	can_enable();
+	vTaskDelay(pdMS_TO_TICKS(15));
 
 	return (char*)ok_str;
 }
-
 
 static char* elm327_set_timeout(const char* command_str)
 {
@@ -671,54 +734,9 @@ static char* elm327_set_timeout(const char* command_str)
 		elm327_config.req_timeout = 0x32;
 	}
 
-	ESP_LOGI(TAG, "req_timeout = %lu ms", (TickType_t)((elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS));
+	ESP_LOGI(TAG, "%lu ms", (TickType_t)((elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS));
 
 	return (char*)ok_str;
-}
-
-static char hex_to_num(char a)
-{
-	char x = a;
-	if(x >= 'a')
-		x = x - 'a' + 10;
-	// Uppercase letters
-	else if(x >= 'A')
-		x = x - 'A' + 10;
-	// Numbers
-	else
-		x = x - '0';
-
-	return x;
-}
-static char* elm327_describe_protocol(const char* command_str)
-{
-	static char protocol[10][50] = {
-								"AUTO",
-								"SAE J1850 PWM",	//1
-								"SAE J1850 VPW",	//2
-								"ISO 9141-2",		//3
-								"ISO 14230-4 KWP/5",	//4
-								"ISO 14230-4 KWP",		//5
-								"ISO 15765-4 CAN (11 bit ID, 500 kbaud)",	//6
-								"ISO 15765-4 CAN (29 bit ID, 500 kbaud)",	//7
-								"ISO 15765-4 CAN (11 bit ID, 250 kbaud)",	//8
-								"ISO 15765-4 CAN (29 bit ID, 250 kbaud)"};	//9
-
-	uint8_t protocool_number = (uint8_t)hex_to_num(elm327_config.protocol);
-	if(protocool_number >= 10)
-	{
-		return 0;
-	}
-	return (char*)&protocol[protocool_number][0];
-}
-
-static char* elm327_describe_protocol_num(const char* command_str)
-{
-	static char protocol_number_str[3];
-
-	sprintf( protocol_number_str, "%c", elm327_config.protocol);
-
-	return protocol_number_str;
 }
 
 static char* elm327_input_voltage(const char* command_str)
@@ -739,36 +757,27 @@ static char* elm327_input_voltage(const char* command_str)
 
 static uint32_t elm327_get_identifier()
 {
-	if(!elm327_config.header_is_set) {
-		switch(elm327_config.protocol) {
-			case '6':
-			case '8':
-				// return 0x7E0
-				return 0x7DF;
-			case '7':
-			case '9':
-				// return 0x18DAF10A;
-				return 0x18DB33F1;
-			default:
-				// In theory this line shouldn't be hit,
-				// but just in case return something reasonable
-				return 0x7DF;
-		}
+	/*
+	switch(elm327_config.protocol) {
+		case '6':
+		case '8':
+			// The TWAI api isn't clear if it handles masking the header
+			// So to be safe we mask it ourselves
+			return elm327_config.header & TWAI_STD_ID_MASK;
+		case '7':
+		case '9':
+			return (elm327_config.priority_bits << 24) | elm327_config.header;
+		default:
+			// In theory this line shouldn't be hit,
+			// but just in case return something reasonable
+			return elm327_config.header;
+	}
+	*/
+
+	if (elm327_config.extd) {
+		return ((elm327_config.priority_bits << 24) | elm327_config.header) & TWAI_EXT_ID_MASK;
 	} else {
-		switch(elm327_config.protocol) {
-			case '6':
-			case '8':
-				// The TWAI api isn't clear if it handles masking the header
-				// So to be safe we mask it ourselves
-				return elm327_config.header & TWAI_STD_ID_MASK;
-			case '7':
-			case '9':
-				return (elm327_config.priority_bits << 24) | elm327_config.header;
-			default:
-				// In theory this line shouldn't be hit,
-				// but just in case return something reasonable
-				return elm327_config.header;
-		}
+		return elm327_config.header & TWAI_STD_ID_MASK;
 	}
 }
 
@@ -939,7 +948,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 {
 	twai_message_t txframe;
 	txframe.identifier = elm327_get_identifier();
-	txframe.extd = elm327_config.protocol == '7' || elm327_config.protocol == '9';
+	txframe.extd = elm327_config.extd;//elm327_config.protocol == '7' || elm327_config.protocol == '9';
 
 	// Initialize the data
 	memset(txframe.data, 0xAA, 8);
@@ -1535,14 +1544,11 @@ const xelm327_cmd_t elm327_commands[] = {
 											{"fcsh", elm327_set_fc_header},// set the flow control header
 											{"fcsm", elm327_set_fc_mode}, // determine if the fc_data and/or fc_header is uses
 											{"cfc", elm327_set_fc_enabled}, // CAN Flow Control off or on
-											{"dpn", elm327_describe_protocol_num},//describe protocol by number
 											{"cra", elm327_set_receive_address},
 											{"cp", elm327_set_priority_bits},// set five most significant bits of 29bit header
-											{"dp", elm327_describe_protocol},//describe current protocol
 											{"sh", elm327_set_header},// set header to xyz, xx yy zz, or ww xx yy zz
 											{"at", elm327_return_ok},//adaptive timing control
-											{"sp", elm327_set_protocol},//set protocol to h and save as new default, 6, 7, 8, 9
-																	 // or ah	set protocol to auto, h
+											{"sp", elm327_set_protocol},//set protocol to h and save as new default, 6, 7, 8, 9 or ah set protocol to auto, h
 											{"rv", elm327_input_voltage},//read input voltage
 											{"pc", elm327_return_ok},//close protocol
 											{"st", elm327_set_timeout},//set timeout
@@ -1739,12 +1745,13 @@ int elm327_print_canid(char *buff, twai_message_t *frame)
 	}
 }
 
-void elm327_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type))
+void elm327_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type), int terminal_resistor_led)
 {
 	elm327_set_default_config(true);
 	elm327_response = send_to_host;
 	elm327_can_log = can_log;
 	can_rx_queue = xQueueCreate(RX_QUEUE_LENGTH * 4, sizeof(twai_message_t));
+	terminalR_led = terminal_resistor_led;
 }
 
 void elm327_uart_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue)
