@@ -81,6 +81,12 @@ typedef struct __xelm327_config
 	int uds_rps_last_rx_size; // value of 'rx queue size' which last sent to user when 'skip prefix' is active
 	int uds_rps_last_count;
 
+	int kline_baud; // baud rate
+	int kline_parity; // E_PARITY_N = 0, E_PARITY_O = 1, E_PARITY_E = 2, E_PARITY_M = 3, E_PARITY_S = 4,
+	int kline_data_bits; // E_DATABITS_7 = 7, E_DATABITS_8 = 8,
+	int kline_stop_bits; // E_STOPBITS_1 = 0, E_STOPBITS_2 = 2,
+	int kline_monoline; // '1' means K-Line, i.e. echo-bytes should be checked
+
 }_xelm327_config_t;
 
 
@@ -144,6 +150,13 @@ static void elm327_set_default_config(bool reset_protocol)
 	elm327_config.perm_cmd_delay = 0;
 
 	elm327_config.uds_rps_skip_size = 0;
+
+	elm327_config.kline_baud = 10400; // baud rate
+	elm327_config.kline_parity = 0; // E_PARITY_N = 0, E_PARITY_O = 1, E_PARITY_E = 2, E_PARITY_M = 3, E_PARITY_S = 4,
+	elm327_config.kline_data_bits = 8; // E_DATABITS_7 = 7, E_DATABITS_8 = 8,
+	elm327_config.kline_stop_bits = 0; // E_STOPBITS_1 = 0, E_STOPBITS_2 = 2,
+	elm327_config.kline_monoline = 1; // '1' means K-Line, i.e. echo-bytes should be checked
+
 }
 
 typedef char* (*elm327_command_callback)(const char* command_str);
@@ -1204,7 +1217,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 	const int64_t txtime = esp_timer_get_time();
 
 	xdev_buffer xsend_buffer;
-	int echo_length = kwp_bytes_count;
+	int echo_length = (elm327_config.kline_monoline == 1 ? kwp_bytes_count : 0);
 	int data_length = 0;
 	int headerSize = 1;
 
@@ -1323,9 +1336,22 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 
 static void elm327_kline_baud(const char* command_str, QueueHandle_t *q)
 {
-	const int baudRate = strtol((char *) &command_str[4], NULL, 16); // considers length of 'baud'
+	// restore spaces for sscanf
+	char *p = (char*)&command_str[4];
+	while ((p = strchr(p, '_')) != NULL) {
+		*p = ' ';
+	}
 
-	if (wc_kline_baudrate(baudRate)) {
+	int parity = 0, dataBits = 8, stopBits = 0, monoline = 1;
+	const int fieldCount = sscanf(&command_str[4], "%d %d %d %d %d", &elm327_config.kline_baud, &parity, &dataBits, &stopBits, &monoline); // considers length of 'baud'
+	if (fieldCount == 5) {
+		elm327_config.kline_parity = parity;
+		elm327_config.kline_data_bits = dataBits;
+		elm327_config.kline_stop_bits = stopBits;
+		elm327_config.kline_monoline = monoline;
+	}
+
+	if (wc_kline_baudrate(elm327_config.kline_baud, elm327_config.kline_parity, elm327_config.kline_data_bits, elm327_config.kline_stop_bits)) {
 		elm327_response("OK\r>", 0, q);
 	} else {
 		elm327_response("kwp_baud_fails_ CAN ERROR\r>", 0, q);

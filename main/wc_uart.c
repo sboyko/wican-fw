@@ -54,17 +54,26 @@ static int64_t uart_mode_time = 0;
 static UartMode request_uart_mode = UART_USB;
 static int request_uart_baud = 0;
 
+static uart_config_t kline_uart_config = {
+    .baud_rate = 0,
+    .data_bits = UART_DATA_8_BITS,
+    .parity = UART_PARITY_DISABLE,
+    .stop_bits = UART_STOP_BITS_1,
+    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+    .source_clk = UART_SCLK_APB,
+};
 
-static void setup_uart_usb(int baudRate)
+static const uart_config_t usb_uart_config = {
+    .baud_rate = UART_USB_BAUDRATE,
+    .data_bits = UART_DATA_8_BITS,
+    .parity = UART_PARITY_DISABLE,
+    .stop_bits = UART_STOP_BITS_1,
+    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+    .source_clk = UART_SCLK_APB,
+};
+
+static void setup_uart_usb(const uart_config_t* const uart_config)
 {
-    const uart_config_t uart_config = {
-        .baud_rate = baudRate,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_APB,
-    };
     // We won't use a buffer for sending data.
     //uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
     int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
@@ -72,7 +81,7 @@ static void setup_uart_usb(int baudRate)
         ESP_LOGE(__func__, "uart_driver_install() fails (%d)", ret);
     }
 
-    uart_param_config(uart_num, &uart_config);
+    uart_param_config(uart_num, uart_config);
 
     // // Enable UART RX FIFO full threshold interrupts
     // uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL|UART_INTR_RXFIFO_OVF);
@@ -127,7 +136,7 @@ static void uart_rx_task(void *arg)
             uart_baud = request_uart_baud;
 
             close_uart_usb();
-            setup_uart_usb(uart_baud);
+            setup_uart_usb(uart_mode == UART_USB ? &usb_uart_config : &kline_uart_config);
         }
 
      	if (xQueueReceive(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(uart_mode == UART_KLINE ? 1 : 0))) {
@@ -258,7 +267,7 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
     kline_rx_queue = kLineRX_Queue;
     led_kline = kline_led;
 
-    setup_uart_usb(UART_USB_BAUDRATE);
+    setup_uart_usb(&usb_uart_config);
 
     // Note: looks like one task is faster then two separate tasks
     //
@@ -267,8 +276,13 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
 }
 
 // API
-bool wc_kline_baudrate(int baudRate)
+bool wc_kline_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits)
 {
+    kline_uart_config.baud_rate = baudRate;
+    kline_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
+    kline_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
+    kline_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
+
     wc_kline_enable(true);
     request_uart_baud = baudRate;
 

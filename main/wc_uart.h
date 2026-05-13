@@ -24,7 +24,7 @@
 void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t connected_led, uint8_t kline_led);
 
 // Set baud rate for KLine
-bool wc_kline_baudrate(int baudRate);
+bool wc_kline_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits);
 
 /**
  * Set (periodically) KLine using mode, results in switching LED on.
