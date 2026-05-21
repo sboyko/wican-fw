@@ -50,7 +50,7 @@ static const uart_port_t uart_num = UART_NUM_0;
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL, *kline_rx_queue = NULL;
 static QueueHandle_t gps_rx_queue;
 static QueueHandle_t uart0_queue;
-static int led_kline_gps = GPIO_NUM_NC; // not connected
+static int kline_gps_led = GPIO_NUM_NC; // not connected
 
 static UartMode request_uart_mode = UART_USB;
 static int request_uart_baud = 0;
@@ -141,7 +141,7 @@ static void uart_rx_task(void *arg)
         if (uart_mode != request_uart_mode) {
             uart_mode = request_uart_mode;
             
-            gpio_set_level(led_kline_gps, uart_mode == UART_KLINE ? 0 : 1);
+            gpio_set_level(kline_gps_led, uart_mode == UART_KLINE ? 0 : 1);
         }
         if (uart_baud != request_uart_baud) {
             uart_baud = request_uart_baud;
@@ -278,13 +278,13 @@ static void uart_tx_task(void *arg)
 */
 
 // API
-void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t kline_gps_led)
+void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t kline_led)
 {
     xuart_tx_queue = xTXp_Queue;
 	xuart_rx_queue = xRXp_Queue;
     kline_rx_queue = kLineRX_Queue;
     gps_rx_queue = xQueueCreate(10, sizeof( xdev_buffer) ); // GPS RX queue
-    led_kline_gps = kline_gps_led;
+    kline_gps_led = kline_led;
 
     gps_serial_init(xuart_tx_queue, &gps_rx_queue);
 

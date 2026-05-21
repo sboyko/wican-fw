@@ -76,7 +76,7 @@ static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static esp_websocket_client_handle_t ws_client = NULL;
 static bool ws_authenticated = false;
 
-static int ws_led = GPIO_NUM_NC; // not connected
+static int conn_led = GPIO_NUM_NC; // not connected
 
 httpd_handle_t server = NULL;
 char *device_config_file = NULL;
@@ -630,7 +630,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
         rsp_arg.fd = httpd_req_to_sockfd(req);
 //        tcp_server_suspend();
 //        vTaskResume(ws_tx_task_handle);
-        gpio_set_level(ws_led, 0);
+        gpio_set_level(conn_led, 0);
         xEventGroupSetBits( xServerEventGroup, WS_HANDLER_CONNECTED_BIT );
         return ESP_OK;
     }
@@ -1659,7 +1659,7 @@ static void ws_tx_task(void *pvParameters)
 			if (ret != ESP_OK)
 			{
 	//	    	tcp_server_resume();
-				gpio_set_level(ws_led, 1);
+				gpio_set_level(conn_led, 1);
 				xEventGroupClearBits( xServerEventGroup, WS_HANDLER_CONNECTED_BIT );
 	//	    	vTaskSuspend( NULL );
 
@@ -2027,7 +2027,7 @@ void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, i
     if (server == NULL)
     {
 		device_id = did;
-    	ws_led = connected_led;
+    	conn_led = connected_led;
     	xTX_Queue = xTXp_Queue;
     	xRX_Queue = xRXp_Queue;
         ESP_LOGI(TAG, "Starting webserver");

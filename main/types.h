@@ -42,4 +42,8 @@ typedef struct __xdev_buffer
 	dev_channel_t dev_channel;
 }xdev_buffer;
 
+// Notifies status of send() task (both CAN and K-Line).
+// Called from elm327 commands processor.
+void notify_send_status(bool sent);
+
 #endif

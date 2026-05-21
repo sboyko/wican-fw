@@ -200,6 +200,8 @@ static esp_err_t can_tx_task(twai_message_t *message)
 		
 		result = can_send(message, send_wait_ms);
 	}
+
+	notify_send_status(result == ESP_OK);
 	return result;
 }
 
@@ -1220,7 +1222,10 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 	if (!elm327_response(rsp, kwp_bytes_count, xuart_tx_queue)) {
 		elm327_response("kwp_send_fails_ CAN ERROR\r>", 0, q);
 		close_skip_mode();
+		notify_send_status(false);
 		return;
+	} else {
+		notify_send_status(true);
 	}
 
 	TickType_t totalMs = (elm327_config.req_timeout*4.096) / portTICK_PERIOD_MS;

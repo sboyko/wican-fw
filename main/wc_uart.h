@@ -21,7 +21,7 @@
 #ifndef __WC_UART_H__
 #define __WC_UART_H__
 
-void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t kline_gps_led);
+void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t kline_led);
 
 
 // Set baud rate for KLine

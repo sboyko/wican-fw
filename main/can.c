@@ -378,20 +378,7 @@ esp_err_t can_send(twai_message_t *message, TickType_t ticks_to_wait)
 
 bool can_is_enabled(void)
 {
-	if(can_cfg.bus_state == ON_BUS)
-	{
-		return true;
-	}
-	else return false;
+	return can_cfg.bus_state == ON_BUS;
 //	EventBits_t uxBits = xEventGroupGetBits(s_can_event_group);
 //	return (uxBits & CAN_ENABLE_BIT);
-}
-
-uint32_t can_msgs_to_rx(void)
-{
-	twai_status_info_t status_info;
-
-	twai_get_status_info(&status_info);
-
-	return status_info.msgs_to_rx;
 }
