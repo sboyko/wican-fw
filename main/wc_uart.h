@@ -21,15 +21,32 @@
 #ifndef __WC_UART_H__
 #define __WC_UART_H__
 
-void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t connected_led, uint8_t kline_led);
+void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t kline_gps_led);
+
 
 // Set baud rate for KLine
-bool wc_kline_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits);
+bool wc_kline_set_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits);
 
 /**
- * Set (periodically) KLine using mode, results in switching LED on.
- * KLine using mode will be automatically turned off when not called for more then 10 seconds.
+ * Set (periodically) KLine using mode, results in switching 'kline_gps_led' to K-Line mode.
+ * KLine using mode will be automatically turned off (to USB mode) when not called for more then 10 seconds.
  */
-void wc_kline_enable(bool isOnNotOff);
+void wc_kline_update(bool isOnNotOff);
+
+// checks that K-Line is active right now
+bool wc_kline_active();
+
+
+// Set baud rate for GPS
+bool wc_gps_set_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits);
+
+/**
+ * Set (periodically) GPS using mode, results in switching 'kline_gps_led' to GPS mode.
+ * GPS using mode will be automatically turned off (to USB mode) when not called for more then 10 seconds.
+ */
+void wc_gps_update(bool isOnNotOff);
+
+// checks that GPS is active right now
+bool wc_gps_active();
 
 #endif

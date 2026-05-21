@@ -53,24 +53,30 @@
 #include "esp_mac.h"
 #include "ftp.h"
 
+#include "gps_common.h"
+#include "gps_nmea.h"
+
+#include <stdatomic.h>
+
+
 #define TAG 		__func__
 
-#define PWR_LED_GPIO_NUM            7  // blue (HL1 (USB/W) - dev_channel_t state (open/close))
+#define PWR_LED_GPIO_NUM            7  // blue (HL1 (USB/W) - 0: off / 1: on)
 #define CONNECTED_LED_GPIO_NUM      8  // green (HL5 (CAN TR) - 0: on / 1: off)
 #define ACTIVE_LED_GPIO_NUM         9  // yellow (HL6 (CAN RX) - 0: on / 1: off)
 #define KLINE_GPS_LED_GPIO_NUM      10 // (HL2 (K-Line) / HL3 (GPS) - 0: KLine / 1: GPS)
 
 #define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CONNECTED_LED_GPIO_NUM) | (1ULL<<ACTIVE_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<KLINE_GPS_LED_GPIO_NUM))
 
-static QueueHandle_t xMsg_Tx_Queue, xMsg_Rx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_mqtt_rx_queue;
-static QueueHandle_t xmsg_uart_rx_queue;
-static QueueHandle_t* host_txQueue = NULL;
+static QueueHandle_t xMsg_Tx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue;
+static QueueHandle_t xMsg_Rx_Queue, xmsg_mqtt_rx_queue, xmsg_uart_rx_queue;
 
-static int64_t host_rx_last_time = 0;
-static int64_t host_tx_last_time = 0; // last time we schedule send data to host
+static QueueHandle_t* host_txQueue = NULL;
+static int64_t host_tx_last_time = 0; // last time we successfully scheduled send message to host
+static int64_t host_rx_last_time = 0; // last time we successfully received message from host (or fake-received when bulk-mode)
+static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(20);
 
 static uint8_t protocol = SLCAN;
-static const TickType_t RESPONSE_TICKS = pdMS_TO_TICKS(20);
 
 uint8_t project_hardware_rev;
 int FTP_TASK_FINISH_BIT = BIT2;
@@ -152,13 +158,22 @@ static void process_led(bool state)
 	}
 }
 
-//TODO: make this pretty?
-bool host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
+static bool hasHostTxConnection()
 {
-	static xdev_buffer xsend_buffer;
+	return esp_timer_get_time() - host_rx_last_time < 6*1000*1000; // doubled PING time
+}
+
+//TODO: make this pretty?
+bool host_tx_task(const char* str, uint32_t len, QueueHandle_t *q)
+{
+	xdev_buffer xsend_buffer;
 
 	const int totalLength = (len == 0 ? strlen(str) : len);
 	int offset = 0;
+
+	if (!hasHostTxConnection()) { // addition guard
+		return false;
+	}
 
 	while (offset < totalLength) {
 		xsend_buffer.usLen = MIN(totalLength - offset, sizeof(xsend_buffer.ucElement));
@@ -180,22 +195,33 @@ bool host_tx_task(char* str, uint32_t len, QueueHandle_t *q)
 	return true;
 }
 
-int fnHasNewData()
+int hostHasNewData()
 {
 	return uxQueueMessagesWaiting(xMsg_Rx_Queue);
 }
 
-static void assignHostTxQueue(QueueHandle_t* const queue)
+static QueueHandle_t* getHostTxQueue()
 {
-	QueueHandle_t* const old_txQueue = host_txQueue;
-	host_txQueue = queue;
+	return atomic_load(&host_txQueue);
+}
+
+static void setHostTxQueue(QueueHandle_t* const queue)
+{
+	QueueHandle_t* const old_txQueue = atomic_exchange(&host_txQueue, queue);
+
+	if (queue == NULL && old_txQueue != NULL) {
+		ESP_LOGW(TAG, "Set to NULL");
+
+		vTaskDelay(pdMS_TO_TICKS(10));
+		xQueueReset(*old_txQueue);
+	}
 
 	if (config_server_get_ble_config()) {
-		if (old_txQueue != host_txQueue) {
-			if (old_txQueue == &xmsg_uart_tx_queue && host_txQueue == NULL) {
+		if (old_txQueue != queue) {
+			if (old_txQueue == &xmsg_uart_tx_queue && queue == NULL) {
 				ble_enable();
 				ESP_LOGW(TAG, "enable ble");
-			} else if (host_txQueue == &xmsg_uart_tx_queue) {
+			} else if (queue == &xmsg_uart_tx_queue) {
 				ble_disable();
 				ESP_LOGW(TAG, "disable ble");
 			}
@@ -205,8 +231,8 @@ static void assignHostTxQueue(QueueHandle_t* const queue)
 
 static void host_rx_task(void *pvParameters)
 {
-	xdev_buffer ucTCP_RX_Buffer;
-	int64_t rx_time = esp_timer_get_time();
+	xdev_buffer rx_buffer;
+	host_rx_last_time = esp_timer_get_time();
 
 	while(1)
 	{
@@ -215,75 +241,66 @@ static void host_rx_task(void *pvParameters)
 		/**
 		 * modes:
 		 * - normal (recv-send)
-		 * - perm_commands (send), ping_5s (for recv)
-		 * - monitor (send), ping_5s (for recv)
+		 * - perm_commands (send), ping_3s (for recv)
+		 * - monitor (send), ping_3s (for recv)
 		 * - bulk (recv), idle_cmd (for missed recv)
 		 */
-		if (xQueueReceive(xMsg_Rx_Queue, &ucTCP_RX_Buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
-			if (esp_timer_get_time() - rx_time > 10*1000*1000) {
-				if (host_txQueue) { // no 'ping' for over 10s (looks like AKM was abnormally terminated)
-					//assignHostTxQueue(NULL);
-					//clear_perm_commands(true);
-					//ble_disconnect();
-
-					esp_restart();
+		if (xQueueReceive(xMsg_Rx_Queue, &rx_buffer, pdMS_TO_TICKS(perm_delay > 0 ? perm_delay : 15)) != pdTRUE) {
+			if (!hasHostTxConnection()) { // no 'ping' for over 3s*2 (looks like AKM was terminated)
+				if (getHostTxQueue()) {
+					setHostTxQueue(NULL);
+					// esp_restart();
 				} else {
 					if (config_server_get_ble_config()) {
 						ble_restart_advertising();
 					}
 				}
 
-				rx_time = esp_timer_get_time();
+				host_rx_last_time = esp_timer_get_time(); // prevents spamming
 			}
 
 			bool hasCommand = false;
-			if (host_txQueue) {
+			if (getHostTxQueue()) {
 				if (perm_delay > 0) {
-					hasCommand = elm327_process_perm_cmd(&ucTCP_RX_Buffer);
-				} else if (esp_timer_get_time() - rx_time > 3*1000*1000) {
-					if (elm327_process_idle_cmd(&ucTCP_RX_Buffer)) { // send idle_cmd in case 'bulk' mode in on
+					hasCommand = elm327_process_perm_cmd(&rx_buffer);
+				} else if (esp_timer_get_time() - host_rx_last_time > 2*1000*1000) {
+					if (elm327_process_idle_cmd(&rx_buffer)) { // send idle_cmd in case 'bulk' mode in on
 						hasCommand = true;
-						rx_time = esp_timer_get_time();
+						host_rx_last_time = esp_timer_get_time();
 					}
 				}
 			}
-
 			if (!hasCommand) {
-				if (esp_timer_get_time() - host_rx_last_time > 6*1000*1000) { // no perm/monitor commands for 6s
-					assignHostTxQueue(NULL);
-				}
 				continue;
 			}
 		} else {
-			rx_time = esp_timer_get_time();
+			host_rx_last_time = esp_timer_get_time();
 		}
 
-		host_rx_last_time = esp_timer_get_time();
-
 #ifndef NDEBUG
-		ESP_LOG_BUFFER_HEXDUMP(TAG, ucTCP_RX_Buffer.ucElement, ucTCP_RX_Buffer.usLen, ESP_LOG_INFO);
+		ESP_LOG_BUFFER_HEXDUMP(TAG, rx_buffer.ucElement, rx_buffer.usLen, ESP_LOG_INFO);
 #endif
 
-		uint8_t* msg_ptr = ucTCP_RX_Buffer.ucElement;
-		int temp_len = ucTCP_RX_Buffer.usLen;
+		uint8_t* msg_ptr = rx_buffer.ucElement;
+		int temp_len = rx_buffer.usLen;
 
-		if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI) {
-			assignHostTxQueue(&xMsg_Tx_Queue);
-		} else if(ucTCP_RX_Buffer.dev_channel == DEV_BLE) {
-			assignHostTxQueue(&xmsg_ble_tx_queue);
-		} else if(ucTCP_RX_Buffer.dev_channel == DEV_UART) {
-			assignHostTxQueue(&xmsg_uart_tx_queue);
-		} else { // if(ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS) {
-			assignHostTxQueue(&xmsg_ws_tx_queue);
+		if(rx_buffer.dev_channel == DEV_WIFI) {
+			setHostTxQueue(&xMsg_Tx_Queue);
+		} else if(rx_buffer.dev_channel == DEV_BLE) {
+			setHostTxQueue(&xmsg_ble_tx_queue);
+		} else if(rx_buffer.dev_channel == DEV_UART) {
+			setHostTxQueue(&xmsg_uart_tx_queue);
+		} else { // if(rx_buffer.dev_channel == DEV_WIFI_WS) {
+			setHostTxQueue(&xmsg_ws_tx_queue);
 		}
 
 		if(protocol == OBD_ELM327)
 		{
-			if (ucTCP_RX_Buffer.dev_channel == DEV_WIFI_WS && config_server_ws_connected()) {
+			if (rx_buffer.dev_channel == DEV_WIFI_WS && config_server_ws_connected()) {
 				twai_message_t tx_msg;
 				slcan_parse_str(msg_ptr, temp_len, &tx_msg, host_txQueue);
 			} else {
-				elm327_process_cmd(msg_ptr, temp_len, host_txQueue, fnHasNewData);
+				elm327_process_cmd(msg_ptr, temp_len, host_txQueue, hostHasNewData);
 			}
 		}
 		else if(protocol == SLCAN)
@@ -312,76 +329,63 @@ static void host_rx_task(void *pvParameters)
 static void can_rx_task(void *pvParameters)
 {
 	xdev_buffer ucTCP_TX_Buffer;
-    twai_message_t rx_msg;
+	twai_message_t rx_msg;
 	mqtt_can_message_t mqtt_rx_msg;
 
 	while(true)
 	{
-		/**
-		 * Acts so that WiCAN won't be silent for more than 500 ms
-		 */
-		QueueHandle_t* const txQueue = host_txQueue;
-		if(txQueue) {
-			if (esp_timer_get_time() - host_tx_last_time > 500*1000) { // no send to host for 0.5s
-				host_tx_task("\r", 1, txQueue);
-				
-				host_tx_last_time = esp_timer_get_time(); // prevents spamming
-			}
-		}
-
 		if (!can_is_enabled()) {
 			vTaskDelay(pdMS_TO_TICKS(10));
 			continue;
 		}
 
-        if(can_receive(&rx_msg, pdMS_TO_TICKS(5)) == ESP_OK)
-        {
+		if(can_receive(&rx_msg, pdMS_TO_TICKS(5)) == ESP_OK)
+		{
 			// ESP_LOGI(TAG, "%08X%c  %02X %02X %02X %02X %02X %02X %02X %02X",
 			// 	(unsigned int)(rx_msg.identifier&TWAI_EXTD_ID_MASK), (rx_msg.extd ? 'x' : ' '),
 			// 	(unsigned int)rx_msg.data[0], (unsigned int)rx_msg.data[1], (unsigned int)rx_msg.data[2],
 			// 	(unsigned int)rx_msg.data[3], (unsigned int)rx_msg.data[4], (unsigned int)rx_msg.data[5],
 			// 	(unsigned int)rx_msg.data[6], (unsigned int)rx_msg.data[7]);
 
-        	process_led(1);
+			process_led(1);
 
-			QueueHandle_t* const txQueue = host_txQueue;
+			ucTCP_TX_Buffer.ucElement[0] = 0;
+			ucTCP_TX_Buffer.usLen = 0;
+
+			if(protocol == OBD_ELM327)
+			{
+				// if (txQueue == &xmsg_ws_tx_queue && config_server_ws_connected()) {
+				// 	ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
+				// } else {
+					ucTCP_TX_Buffer.usLen = elm327_process_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
+				// }
+			}
+			else if(protocol == SLCAN)
+			{
+				ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
+			}
+			else if(protocol == REALDASH)
+			{
+				ucTCP_TX_Buffer.usLen = real_dash_set_66(&rx_msg, ucTCP_TX_Buffer.ucElement);
+			}
+			else if(protocol == SAVVYCAN)
+			{
+				ucTCP_TX_Buffer.usLen = gvret_parse_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
+			}
+
+			QueueHandle_t* const txQueue = getHostTxQueue();
 			if(txQueue)
 			{
-				ucTCP_TX_Buffer.ucElement[0] = 0;
-				ucTCP_TX_Buffer.usLen = 0;
-
-				if(protocol == OBD_ELM327)
-				{
-					if (txQueue == &xmsg_ws_tx_queue && config_server_ws_connected()) {
-						ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-					} else {
-						ucTCP_TX_Buffer.usLen = elm327_process_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-					}
-				}
-				else if(protocol == SLCAN)
-				{
-					ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-				}
-				else if(protocol == REALDASH)
-				{
-					ucTCP_TX_Buffer.usLen = real_dash_set_66(&rx_msg, ucTCP_TX_Buffer.ucElement);
-				}
-				else if(protocol == SAVVYCAN)
-				{
-					ucTCP_TX_Buffer.usLen = gvret_parse_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
-				}
-
-
 				if(ucTCP_TX_Buffer.usLen > 0)
 				{
-					if (xQueueSend( *txQueue, &ucTCP_TX_Buffer, RESPONSE_TICKS ) != pdTRUE) {
-						ESP_LOGE(TAG, "xQueueSend() fails");
-						//assert(false);
-					} else {
-						host_rx_last_time = esp_timer_get_time();
-						host_tx_last_time = esp_timer_get_time();
-					}
+					host_tx_task((const char*)ucTCP_TX_Buffer.ucElement, ucTCP_TX_Buffer.usLen, txQueue);
 				}
+			}
+			else // no activity on WiCAN
+			{
+				can_disable();
+				gpio_set_level(CONNECTED_LED_GPIO_NUM, 1); // CAN TR 'off'
+				process_led(0);
 			}
 
 			if(mqtt_connected() && mqtt_elm327_log_en == 0)
@@ -406,10 +410,77 @@ static void can_rx_task(void *pvParameters)
 				mqtt_rx_msg.type = MQTT_CAN;
 				xQueueSend( xmsg_mqtt_rx_queue, &mqtt_rx_msg, RESPONSE_TICKS );
 			}
-        }
+		}
 		else
 		{
-	        process_led(0);
+			process_led(0);
+		}
+	}
+}
+
+static void nmea_rx_task(void *pvParameters)
+{
+	// commands (Trema GPS модуль ATGM336H):
+	// $PCAS02,1000  // gps_select_updaterate(1) - УСТАНОВКА ЧАСТОТЫ ОБНОВЛЕНИЯ ДАННЫХ (1 раз в секунду)
+	// $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0  // gps_select_composition(NMEA_RMC) - УСТАНОВКА СОСТАВА ПАКЕТА NMEA
+	// $PCAS10,0  // gps_reset(0) (0 - HOT_START, 1 - WARM_START, 2 - COLD_START, 3 - FACTORY_SET)
+	char gps_init_commands[] = "\
+$PCAS02,1000\r\
+$PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
+";
+	const int gps_uart_baudRate = 9600;
+	const int gps_uart_parity = 0;
+	const int gps_uart_dataBits = 8;
+	const int gps_uart_stopBits = 0;
+
+	xdev_buffer waste_buffer;
+
+	while(true)
+	{
+		vTaskDelay(pdMS_TO_TICKS(50));
+		gps_wait_enabled(portMAX_DELAY);
+
+		QueueHandle_t* const txQueue = getHostTxQueue();
+		if (txQueue == NULL) { // no activity on WiCAN
+			gps_set_enabled(false); // pause 'nmea_rx_task'
+			wc_gps_update(false); // switch to USB (if not K-Line of course)
+			continue;
+		}
+
+		if (txQueue == &xmsg_uart_tx_queue // protects against simulteneous use of USB and GPS
+				|| wc_kline_active() // don't mess with K-Line
+				|| elm327_process_idle_cmd(&waste_buffer) // detects that 'bulk' mode in on
+				) {
+			continue;
+		}
+
+		if (!wc_gps_active()) {
+			if (!wc_gps_set_baudrate(gps_uart_baudRate, gps_uart_parity, gps_uart_dataBits, gps_uart_stopBits)) {
+				continue;
+			}
+			gps_nmea_send_commands(gps_init_commands, txQueue);
+		}
+
+		wc_gps_update(true);
+		gps_nmea_read_sentence(2000, /*gps_nmea_debug_process_sentence*/gps_nmea_process_sentence, getHostTxQueue);
+	}
+}
+
+static void ping_pong_task(void *pvParameters)
+{
+	while(true)
+	{
+		vTaskDelay(pdMS_TO_TICKS(50));
+
+		/**
+		 * Acts so that WiCAN won't be silent for more than 500 ms.
+		 * As the result host would respond with PING in case of no-send for over then 3s and also not in bulk-mode.
+		 */
+		if (esp_timer_get_time() - host_tx_last_time > 500*1000) { // no send to host for 500ms
+			QueueHandle_t* const txQueue = getHostTxQueue();
+			if (txQueue) {
+				host_tx_task("\r", 0, txQueue);
+			}
 		}
 	}
 }
@@ -432,41 +503,42 @@ static uint8_t uid[33];
 static uint8_t ble_uid[33];
 void app_main(void)
 {
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+	ESP_ERROR_CHECK(nvs_flash_init());
+	ESP_ERROR_CHECK(esp_netif_init());
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    gpio_config_t io_conf = {};
-    //disable interrupt
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    //set as output mode
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
-    io_conf.pull_down_en = 0;
-    //disable pull-up mode
-    io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
-    gpio_config(&io_conf);
+	gpio_config_t io_conf = {};
+	//disable interrupt
+	io_conf.intr_type = GPIO_INTR_DISABLE;
+	//set as output mode
+	io_conf.mode = GPIO_MODE_OUTPUT;
+	//bit mask of the pins that you want to set,e.g.GPIO18/19
+	io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+	//disable pull-down mode
+	io_conf.pull_down_en = 0;
+	//disable pull-up mode
+	io_conf.pull_up_en = 0;
+	//configure GPIO with the given settings
+	gpio_config(&io_conf);
 
-	gpio_set_level(CONNECTED_LED_GPIO_NUM, 1);
-	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1);
-	gpio_set_level(PWR_LED_GPIO_NUM, 1);
+	gpio_set_level(CONNECTED_LED_GPIO_NUM, 1); // CAN TR 'off'
+	gpio_set_level(ACTIVE_LED_GPIO_NUM, 1); // CAN RX 'off'
+	gpio_set_level(PWR_LED_GPIO_NUM, 1); // WiCAN connected 'on'
+	gpio_set_level(KLINE_GPS_LED_GPIO_NUM, 1); // GPS led 'on'
 
-    xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) ); // common RX queue
-    xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) ); // TCP TX queue
-    xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // WS TX queue
+	xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) ); // common RX queue
+	xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) ); // TCP TX queue
+	xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // WS TX queue
 
 	esp_ota_mark_app_valid_cancel_rollback();
 
-    ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
-    sprintf((char *)ble_uid,"WiC_%02x%02x%02x%02x%02x%02x",
-            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
-    sprintf((char *)uid,"%02x%02x%02x%02x%02x%02x",
-            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	sprintf((char *)ble_uid,"WiC_%02x%02x%02x%02x%02x%02x",
+			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+	sprintf((char *)uid,"%02x%02x%02x%02x%02x%02x",
+			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
 	
 	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, (char*)&uid[0]);
 	slcan_init(&host_tx_task);
@@ -538,6 +610,8 @@ void app_main(void)
 		{
 			elm327_init(&host_tx_task, elm327_log_can, CONNECTED_LED_GPIO_NUM);
 		}
+
+		gps_nmea_init(&host_tx_task);
 	}
 
 	if(config_server_mqtt_en_config())
@@ -575,61 +649,63 @@ void app_main(void)
 		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, 0);
 	}
 
-    if(config_server_get_ble_config())
-    {
-    	int pass = config_server_ble_pass();
-    	xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
-    	ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, pass, &ble_uid[0]);
-    }
+	if(config_server_get_ble_config())
+	{
+		int pass = config_server_ble_pass();
+		xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
+		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, PWR_LED_GPIO_NUM, pass, &ble_uid[0]);
+	}
 
 
 
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    esp_app_desc_t running_app_info;
-    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK)
-    {
-        ESP_LOGI(TAG, "Running firmware version: %s", ensurePrintable(running_app_info.version, sizeof(running_app_info.version)));
-        ESP_LOGI(TAG, "Project Name: %s", ensurePrintable(running_app_info.project_name, sizeof(running_app_info.project_name)));
+	const esp_partition_t *running = esp_ota_get_running_partition();
+	esp_app_desc_t running_app_info;
+	if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK)
+	{
+		ESP_LOGI(TAG, "Running firmware version: %s", ensurePrintable(running_app_info.version, sizeof(running_app_info.version)));
+		ESP_LOGI(TAG, "Project Name: %s", ensurePrintable(running_app_info.project_name, sizeof(running_app_info.project_name)));
 
-        if(strstr(running_app_info.project_name, "usb") != 0)
-        {
-        	project_hardware_rev = WICAN_USB_V100;
-        	ESP_LOGI(TAG, "project_hardware_rev: USB");
+		if(strstr(running_app_info.project_name, "usb") != 0)
+		{
+			project_hardware_rev = WICAN_USB_V100;
+			ESP_LOGI(TAG, "project_hardware_rev: USB");
 
 			xmsg_uart_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) ); // USB / K-Line TX queue
 			xmsg_uart_rx_queue = xQueueCreate(16, sizeof( xdev_buffer) ); // K-Line RX queue
-       		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, PWR_LED_GPIO_NUM, KLINE_GPS_LED_GPIO_NUM);
+	   		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, KLINE_GPS_LED_GPIO_NUM);
 			
 			elm327_uart_init(&xmsg_uart_tx_queue, &xmsg_uart_rx_queue);
-        }
-        else
-        {
-        	ESP_LOGI(TAG, "project_hardware_rev: OBD");
-            if(strstr(running_app_info.project_name, "hv210") != 0)
-            {
-            	project_hardware_rev = WICAN_V210;
-            }
-            else
-            {
-            	project_hardware_rev = WICAN_V300;
-            }
-        }
-    }
+		}
+		else
+		{
+			ESP_LOGI(TAG, "project_hardware_rev: OBD");
+			if(strstr(running_app_info.project_name, "hv210") != 0)
+			{
+				project_hardware_rev = WICAN_V210;
+			}
+			else
+			{
+				project_hardware_rev = WICAN_V300;
+			}
+		}
+	}
 
-    xTaskCreate(can_rx_task, "can_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
-    xTaskCreate(host_rx_task, "host_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
+	xTaskCreate(host_rx_task, "host_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
+	xTaskCreate(can_rx_task, "can_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
+	xTaskCreate(nmea_rx_task, "nmea_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
+	xTaskCreate(ping_pong_task, "ping_pong_task", 1024*2, (void*)AF_INET, 5, NULL);
 
 	// temporary disable due to conflict with setup_uart_usb(..) in 'wc_uart.c'
 	/*
 	uint8_t enable_sleep = 0;
 	float sleep_voltage = 13.1f;
-    if (project_hardware_rev != WICAN_V210) {
+	if (project_hardware_rev != WICAN_V210) {
 		if (config_server_get_sleep_config()) {
 			if (config_server_get_sleep_volt(&sleep_voltage)) {
 				enable_sleep = 1;
 			}
 		}
-    }
+	}
 	sleep_mode_init(enable_sleep, sleep_voltage);
 	*/
 

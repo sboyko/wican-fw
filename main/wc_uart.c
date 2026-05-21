@@ -21,7 +21,7 @@
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include  "freertos/queue.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -31,12 +31,13 @@
 #include "driver/gpio.h"
 #include "elm327.h"
 #include "wc_uart.h"
-#include "hal/uart_hal.h"
+#include "gps_common.h"
 
 
 typedef enum {
     UART_USB = 1,
     UART_KLINE = 2,
+    UART_GPS = 3,
 } UartMode;
 
 static const int UART_USB_BAUDRATE = 2400000; //460800
@@ -47,12 +48,22 @@ static const int RX_QUEUE_WAIT_TIME_MS = 10;
 static const uart_port_t uart_num = UART_NUM_0;
 
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL, *kline_rx_queue = NULL;
+static QueueHandle_t gps_rx_queue;
 static QueueHandle_t uart0_queue;
-static int led_kline = GPIO_NUM_NC; // not connected
+static int led_kline_gps = GPIO_NUM_NC; // not connected
 
-static int64_t uart_mode_time = 0;
 static UartMode request_uart_mode = UART_USB;
 static int request_uart_baud = 0;
+static int64_t uart_mode_time = 0;
+
+static const uart_config_t usb_uart_config = {
+    .baud_rate = UART_USB_BAUDRATE,
+    .data_bits = UART_DATA_8_BITS,
+    .parity = UART_PARITY_DISABLE,
+    .stop_bits = UART_STOP_BITS_1,
+    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+    .source_clk = UART_SCLK_APB,
+};
 
 static uart_config_t kline_uart_config = {
     .baud_rate = 0,
@@ -63,8 +74,8 @@ static uart_config_t kline_uart_config = {
     .source_clk = UART_SCLK_APB,
 };
 
-static const uart_config_t usb_uart_config = {
-    .baud_rate = UART_USB_BAUDRATE,
+static uart_config_t gps_uart_config = {
+    .baud_rate = 0,
     .data_bits = UART_DATA_8_BITS,
     .parity = UART_PARITY_DISABLE,
     .stop_bits = UART_STOP_BITS_1,
@@ -122,7 +133,7 @@ static void uart_rx_task(void *arg)
     bool uart_wait_mode = false;
 
     while (true) {
-        if (uart_mode == UART_KLINE 
+        if (uart_mode != UART_USB
                 && (uart_mode_time == 0 || esp_timer_get_time() - uart_mode_time > 10*1000*1000)) {
             request_uart_mode = UART_USB;
             request_uart_baud = UART_USB_BAUDRATE;
@@ -130,16 +141,21 @@ static void uart_rx_task(void *arg)
         if (uart_mode != request_uart_mode) {
             uart_mode = request_uart_mode;
             
-            gpio_set_level(led_kline, uart_mode == UART_KLINE ? 0 : 1);
+            gpio_set_level(led_kline_gps, uart_mode == UART_KLINE ? 0 : 1);
         }
         if (uart_baud != request_uart_baud) {
             uart_baud = request_uart_baud;
 
             close_uart_usb();
-            setup_uart_usb(uart_mode == UART_USB ? &usb_uart_config : &kline_uart_config);
+
+            switch (uart_mode) {
+                case UART_KLINE: setup_uart_usb(&kline_uart_config); break;
+                case UART_GPS: setup_uart_usb(&gps_uart_config); break;
+                default: setup_uart_usb(&usb_uart_config);
+            }
         }
 
-     	if (xQueueReceive(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(uart_mode == UART_KLINE ? 1 : 0))) {
+     	if (xQueueReceive(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(uart_mode == UART_USB ? 0 : 1))) {
             failed_waits = 0;
 
             int offset = 0;
@@ -189,6 +205,8 @@ static void uart_rx_task(void *arg)
 
                     if (uart_mode == UART_KLINE) {
                         xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
+                    } else if (uart_mode == UART_GPS) {
+                        xQueueSend(gps_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
                     } else {
                         if (xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(1)) != pdTRUE) {
 #ifndef NDEBUG
@@ -232,7 +250,7 @@ static void uart_rx_task(void *arg)
             }
         }
         
-        wait_ms = (++failed_waits > 1500) ? RX_QUEUE_WAIT_TIME_MS : (uart_mode == UART_KLINE ? 1 : 2);
+        wait_ms = (++failed_waits > 1500) ? RX_QUEUE_WAIT_TIME_MS : (uart_mode == UART_USB ? 2 : 1);
     }
 }
 
@@ -260,12 +278,15 @@ static void uart_tx_task(void *arg)
 */
 
 // API
-void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t connected_led, uint8_t kline_led)
+void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineRX_Queue, uint8_t kline_gps_led)
 {
     xuart_tx_queue = xTXp_Queue;
 	xuart_rx_queue = xRXp_Queue;
     kline_rx_queue = kLineRX_Queue;
-    led_kline = kline_led;
+    gps_rx_queue = xQueueCreate(10, sizeof( xdev_buffer) ); // GPS RX queue
+    led_kline_gps = kline_gps_led;
+
+    gps_serial_init(xuart_tx_queue, &gps_rx_queue);
 
     setup_uart_usb(&usb_uart_config);
 
@@ -276,14 +297,14 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
 }
 
 // API
-bool wc_kline_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits)
+bool wc_kline_set_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits)
 {
     kline_uart_config.baud_rate = baudRate;
     kline_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
     kline_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
     kline_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
 
-    wc_kline_enable(true);
+    wc_kline_update(true);
     request_uart_baud = baudRate;
 
     // 'rx_task' should have a chance to process
@@ -303,7 +324,7 @@ bool wc_kline_baudrate(const int baudRate, const int parity, const int dataBits,
 }
 
 // API
-void wc_kline_enable(bool isOnNotOff)
+void wc_kline_update(bool isOnNotOff)
 {
     if (isOnNotOff) {
         uart_mode_time = esp_timer_get_time();
@@ -311,4 +332,51 @@ void wc_kline_enable(bool isOnNotOff)
     } else {
         uart_mode_time = 0;
     }
+}
+
+// API
+bool wc_kline_active()
+{
+    return request_uart_mode == UART_KLINE;
+}
+
+// API
+bool wc_gps_set_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits)
+{
+    if (wc_kline_active()) {
+        return false;
+    }
+
+    gps_uart_config.baud_rate = baudRate;
+    gps_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
+    gps_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
+    gps_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
+
+    wc_gps_update(true);
+    request_uart_baud = baudRate;
+
+    // 'rx_task' should have a chance to process
+    vTaskDelay(pdMS_TO_TICKS(RX_QUEUE_WAIT_TIME_MS));
+
+    return true;
+}
+
+// API
+void wc_gps_update(bool isOnNotOff)
+{
+    if (wc_kline_active()) {
+        return;
+    }
+
+    if (isOnNotOff) {
+        uart_mode_time = esp_timer_get_time();
+        request_uart_mode = UART_GPS;
+    } else {
+        uart_mode_time = 0;
+    }
+}
+
+bool wc_gps_active()
+{
+    return request_uart_mode == UART_GPS;
 }

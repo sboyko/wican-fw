@@ -28,6 +28,7 @@
 #include "sleep_mode.h"
 #include "elm327.h"
 #include "types.h"
+#include "gps_common.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -44,7 +45,7 @@ const char *device_description = "ELM327 v1.3a meatPi";
 const char *identify = "OBDLink MX";
 
 
-bool (*elm327_response)(char*, uint32_t, QueueHandle_t *q);
+bool (*elm327_response)(const char*, uint32_t, QueueHandle_t *q);
 void (*elm327_can_log)(twai_message_t* frame, uint8_t type);
 // The fields are ordered this way so the data can be tightly packed.
 // See elm327_set_default_config for a more readable ordering.
@@ -1360,7 +1361,7 @@ static void elm327_kline_baud(const char* command_str, QueueHandle_t *q)
 		elm327_config.kline_monoline = monoline;
 	}
 
-	if (wc_kline_baudrate(elm327_config.kline_baud, elm327_config.kline_parity, elm327_config.kline_data_bits, elm327_config.kline_stop_bits)) {
+	if (wc_kline_set_baudrate(elm327_config.kline_baud, elm327_config.kline_parity, elm327_config.kline_data_bits, elm327_config.kline_stop_bits)) {
 		elm327_response("OK\r>", 0, q);
 	} else {
 		elm327_response("kwp_baud_fails_ CAN ERROR\r>", 0, q);
@@ -1370,7 +1371,7 @@ static void elm327_kline_baud(const char* command_str, QueueHandle_t *q)
 static void elm327_kline_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
 {
 	if (!strncmp(cmd, "close", 5)) {
-		wc_kline_enable(false);
+		wc_kline_update(false);
 		return;
 	}
 
@@ -1379,13 +1380,30 @@ static void elm327_kline_request(const char *cmd, const size_t cmd_len, QueueHan
 		return;
 	}
 
-	wc_kline_enable(true);
+	wc_kline_update(true);
 
 	if (!strncmp(cmd, "baud", 4)) {
 		elm327_kline_baud(cmd, q);
  	} else {
 		elm327_kline_send(cmd, cmd_len, q, fnHasNewData);
 	}
+}
+
+static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
+{
+	if (!strncmp(cmd, "off", 3)) {
+		gps_set_enabled(false); // pause 'nmea_rx_task'
+		vTaskDelay(pdMS_TO_TICKS(20));
+		
+		wc_gps_update(false); // switch to USB (if not K-Line of course)
+		return;
+	}
+
+	if (xuart_tx_queue == q) { // protection against simulteneous use of USB and GPS
+		return;
+	}
+
+	gps_set_enabled(true); // resume 'nmea_rx_task'
 }
 
 // API
@@ -1581,6 +1599,7 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 
 	if (len > 4 && memcmp(buf, "AT WS", 5) == 0) {
 		cmd_buffer_len = 0;
+		gps_set_enabled(false); // pause 'nmea_rx_task'
 	}
 
 	for(int i = 0; i < len; i++)
@@ -1597,6 +1616,10 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 			if(!strncmp(cmd_buffer, "kwp", 3))
 			{
 				elm327_kline_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
+			}
+			else if(!strncmp(cmd_buffer, "gps", 3))
+			{
+				elm327_gps_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
 			}
 			else if(!strncmp(cmd_buffer, "at", 2))
 			{
@@ -1745,7 +1768,7 @@ int elm327_print_canid(char *buff, twai_message_t *frame)
 	}
 }
 
-void elm327_init(bool (*send_to_host)(char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type), int terminal_resistor_led)
+void elm327_init(bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type), int terminal_resistor_led)
 {
 	elm327_set_default_config(true);
 	elm327_response = send_to_host;
