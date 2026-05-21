@@ -48,7 +48,7 @@
 #include "dirent.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
-#include "esp_log.h"
+#include "esp_log_wican.h"
 
 #include "esp_wifi.h"
 

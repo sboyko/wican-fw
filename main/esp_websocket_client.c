@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <stdio.h>
-
 #include "esp_websocket_client.h"
 #include "esp_transport.h"
 #include "esp_transport_tcp.h"
@@ -25,10 +23,12 @@
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
-#include "esp_log.h"
+#include "esp_log_wican.h"
 #include "esp_timer.h"
 
+#if ESP_LOG_MAIN != 0
 static const char *TAG = "WEBSOCKET_CLIENT";
+#endif
 
 #define WEBSOCKET_TCP_DEFAULT_PORT      (80)
 #define WEBSOCKET_SSL_DEFAULT_PORT      (443)

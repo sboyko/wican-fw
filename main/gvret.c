@@ -26,7 +26,7 @@
 #include "esp_system.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
-#include "esp_log.h"
+#include "esp_log_wican.h"
 #include <string.h>
 #include "driver/twai.h"
 #include "esp_timer.h"
@@ -74,9 +74,7 @@ int64_t gvert_tmr_get()
 
 static void periodic_timer_callback(void* arg)
 {
-    int64_t time_since_boot = esp_timer_get_time();
-
-    ESP_LOGW(__func__, "Periodic timer called, time since boot: %lld us, %lld", time_since_boot, gvert_tmr_get());
+    ESP_LOGW(__func__, "Periodic timer called, time since boot: %lld us, %lld", esp_timer_get_time(), gvert_tmr_get());
     gvert_tmr_set_start();
 }
 

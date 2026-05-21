@@ -19,26 +19,15 @@
  */
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include  "freertos/queue.h"
-#include "freertos/event_groups.h"
-#include "esp_wifi.h"
-#include "esp_system.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
-#include <string.h>
-#include "comm_server.h"
-#include "lwip/sockets.h"
-#include "driver/twai.h"
+
+#include "esp_log_wican.h"
 #include "can.h"
 
+#define TAG  __func__
 
 static EventGroupHandle_t s_can_event_group = NULL;
 #define CAN_ENABLE_BIT 		BIT0
 
-#define TAG 		__func__
 enum bus_state
 {
     OFF_BUS,

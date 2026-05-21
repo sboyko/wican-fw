@@ -18,16 +18,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "freertos/event_groups.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_log.h"
+#include "esp_log_wican.h"
 #include "driver/uart.h"
-#include "string.h"
 #include "driver/gpio.h"
 #include "elm327.h"
 #include "wc_uart.h"
@@ -209,10 +206,6 @@ static void uart_rx_task(void *arg)
                         xQueueSend(gps_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
                     } else {
                         if (xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(1)) != pdTRUE) {
-#ifndef NDEBUG
-                            sprintf(ws_data, "overflow!!\r");
-                            uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-#endif                            
                             break;
                         }
                     }

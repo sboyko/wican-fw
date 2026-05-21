@@ -2,7 +2,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "esp_log.h"
+#include "esp_log_wican.h"
 
 #include "types.h"
 
@@ -98,14 +98,11 @@ bool gps_serial_send_buffer(const char* str, const uint16_t length)
 
 		if (xQueueSend(*uart_tx_queue, &tx_buffer, 10) != pdTRUE) {
 			ESP_LOGE(TAG, "xQueueSend() fails");
-			//assert(false);
 			return false;
 		}
 		offset += tx_buffer.usLen;
 	
-#ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, tx_buffer.ucElement, tx_buffer.usLen, ESP_LOG_INFO);
-#endif
 	}
 
 	return true;

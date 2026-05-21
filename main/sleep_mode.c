@@ -20,29 +20,20 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include  "freertos/queue.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
-#include "esp_system.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "esp_log.h"
-#include <string.h>
+#include "esp_log_wican.h"
 #include "comm_server.h"
 #include "lwip/sockets.h"
 #include "driver/twai.h"
 #include "types.h"
 #include "esp_timer.h"
 #include "config_server.h"
-#include "realdash.h"
-#include "slcan.h"
 #include "can.h"
 #include "ble.h"
 #include "wifi_network.h"
 #include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 #include "driver/adc.h"
 #include "esp_adc_cal.h"
 // #include "esp_adc/adc_cali.h"
@@ -50,10 +41,7 @@
 #include "ble.h"
 #include "esp_sleep.h"
 #include "lwip/sockets.h"
-#include "lwip/dns.h"
-#include "lwip/netdb.h"
 
-#include "esp_log.h"
 #include "mqtt_client.h"
 #include "ver.h"
 
@@ -206,7 +194,7 @@ static void mqtt_init(void)
     	sprintf(pub_data, "{\"alert\": \"low_battery\", \"battery_voltage\": %f}", batt_voltage);
         int msg_id = esp_mqtt_client_publish(client, config_server_get_alert_topic(), pub_data, 0, 1, 0);
         ESP_LOGI(TAG, "publish, msg_id=%d", msg_id);
-
+		(void)(msg_id);
     }
     else
     {
@@ -238,7 +226,7 @@ static void continuous_adc_init(uint16_t adc1_chan_mask, uint16_t adc2_chan_mask
     for (int i = 0; i < channel_num; i++) {
         uint8_t unit = GET_UNIT(channel[i]);
         uint8_t ch = channel[i] & 0x7;
-        adc_pattern[i].atten = ADC_ATTEN_DB_11;
+        adc_pattern[i].atten = ADC_ATTEN_DB_12;
         adc_pattern[i].channel = ch;
         adc_pattern[i].unit = unit;
         adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
@@ -249,13 +237,13 @@ static void continuous_adc_init(uint16_t adc1_chan_mask, uint16_t adc2_chan_mask
     }
     dig_cfg.adc_pattern = adc_pattern;
     ESP_ERROR_CHECK(adc_digi_controller_configure(&dig_cfg));
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_DEFAULT, 0, &adc1_chars);
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_DEFAULT, 0, &adc1_chars);
 
 
 }
 
 //ADC Attenuation
-#define ADC_EXAMPLE_ATTEN           ADC_ATTEN_DB_11
+#define ADC_EXAMPLE_ATTEN           ADC_ATTEN_DB_12
 
 //ADC Calibration
 #if CONFIG_IDF_TARGET_ESP32

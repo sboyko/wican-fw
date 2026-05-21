@@ -17,42 +17,31 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include  "freertos/queue.h"
-#include "freertos/event_groups.h"
-#include "esp_wifi.h"
-#include "esp_system.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
-#include <string.h>
-#include "esp_timer.h"
-#include "comm_server.h"
-#include "lwip/sockets.h"
 #include "driver/twai.h"
+#include "esp_mac.h"
+#include "esp_ota_ops.h"
+#include "nvs_flash.h"
+#include "esp_wifi.h"
+#include "esp_timer.h"
+
 #include "ver.h"
 #include "types.h"
+#include "comm_server.h"
 #include "config_server.h"
 #include "realdash.h"
 #include "slcan.h"
 #include "can.h"
 #include "ble.h"
 #include "wifi_network.h"
-#include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 #include "gvret.h"
 #include "sleep_mode.h"
 #include "wc_uart.h"
 #include "elm327.h"
 #include "mqtt.h"
-#include "esp_mac.h"
 #include "ftp.h"
 
+#include "esp_log_wican.h"
 #include "gps_common.h"
 #include "gps_nmea.h"
 
@@ -185,14 +174,11 @@ bool host_tx_task(const char* str, uint32_t len, QueueHandle_t *q)
 		memcpy(xsend_buffer.ucElement, str + offset, xsend_buffer.usLen);
 		if (xQueueSend( *q, &xsend_buffer, RESPONSE_TICKS ) != pdTRUE) {
 			ESP_LOGE(TAG, "xQueueSend() fails");
-			//assert(false);
 			return false;
 		}
 		offset += xsend_buffer.usLen;
 	
-#ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, xsend_buffer.ucElement, xsend_buffer.usLen, ESP_LOG_INFO);
-#endif
 	}
 
 	host_tx_last_time = esp_timer_get_time();
@@ -282,9 +268,7 @@ static void host_rx_task(void *pvParameters)
 			host_rx_last_time = esp_timer_get_time();
 		}
 
-#ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(TAG, rx_buffer.ucElement, rx_buffer.usLen, ESP_LOG_INFO);
-#endif
 
 		uint8_t* msg_ptr = rx_buffer.ucElement;
 		int temp_len = rx_buffer.usLen;
@@ -502,6 +486,7 @@ void notify_send_status(bool sent)
 	}
 }
 
+#if ESP_LOG_MAIN != 0
 static char* ensurePrintable(char* str, const int maxLength)
 {
 	for (int i = 0; i < maxLength; ++i) {
@@ -514,6 +499,7 @@ static char* ensurePrintable(char* str, const int maxLength)
 	str[maxLength - 1] = 0;
 	return str;
 }
+#endif
 
 static uint8_t derived_mac_addr[6] = {0};
 static uint8_t uid[33];
@@ -707,10 +693,10 @@ void app_main(void)
 		}
 	}
 
-	xTaskCreate(host_rx_task, "host_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
-	xTaskCreate(can_rx_task, "can_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
-	xTaskCreate(nmea_rx_task, "nmea_rx_task", 1024*3, (void*)AF_INET, 5, NULL);
-	xTaskCreate(ping_pong_task, "ping_pong_task", 1024*2, (void*)AF_INET, 5, NULL);
+	xTaskCreate(host_rx_task, "host_rx_task", 1024*3, NULL, 5, NULL);
+	xTaskCreate(can_rx_task, "can_rx_task", 1024*3, NULL, 5, NULL);
+	xTaskCreate(nmea_rx_task, "nmea_rx_task", 1024*3, NULL, 5, NULL);
+	xTaskCreate(ping_pong_task, "ping_pong_task", 1024*2, NULL, 5, NULL);
 
 	// temporary disable due to conflict with setup_uart_usb(..) in 'wc_uart.c'
 	/*
@@ -733,5 +719,5 @@ void app_main(void)
 	// pdTRUE, /* BIT_0 should be cleared before returning. */
 	// pdFALSE, /* Don't wait for both bits, either bit will do. */
 	// portMAX_DELAY);/* Wait forever. */  
-	esp_log_level_set("*", ESP_LOG_NONE);
+	esp_log_level_set("*", ESP_LOG_MAIN);
 }

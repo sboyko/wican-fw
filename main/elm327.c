@@ -18,11 +18,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "esp_timer.h"
-#include "esp_event.h"
-#include "esp_log.h"
-#include "driver/twai.h"
+#include "esp_log_wican.h"
 #include "can.h"
 #include "wc_uart.h"
 #include "sleep_mode.h"
@@ -31,7 +28,6 @@
 #include "gps_common.h"
 
 #include <ctype.h>
-#include <string.h>
 
 #define TAG 		__func__
 

@@ -21,9 +21,11 @@
 
 #ifndef __COMM_SERVER_H__
 #define __COMM_SERVER_H__
+
 int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, uint8_t udp_en);
 int8_t tcp_port_open(void);
 
 void tcp_server_suspend(void);
 void tcp_server_resume(void);
+
 #endif

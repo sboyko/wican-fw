@@ -21,25 +21,18 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include  "freertos/queue.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
-#include "esp_system.h"
-#include "esp_event.h"
 #include "esp_mac.h"
-#include "nvs_flash.h"
-#include "esp_log.h"
-#include <string.h>
-#include "comm_server.h"
+#include "esp_log_wican.h"
 #include "lwip/sockets.h"
-#include "driver/twai.h"
 #include "config_server.h"
-#include "realdash.h"
-#include "slcan.h"
-#include "can.h"
 #include "ble.h"
 
+#if ESP_LOG_MAIN != 0
 static const char *WIFI_TAG = "wifi_network";
+#endif
 static esp_netif_t* ap_netif;
 static esp_netif_t* sta_netif;
 
@@ -94,9 +87,8 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     if (event_id == WIFI_EVENT_AP_STACONNECTED)
     {
     	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_AP_STACONNECTED");
-        wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
         ESP_LOGI(WIFI_TAG, "station "MACSTR" join, AID=%d",
-                 MAC2STR(event->mac), event->aid);
+                 MAC2STR(((wifi_event_ap_staconnected_t*) event_data)->mac), ((wifi_event_ap_staconnected_t*) event_data)->aid);
         if(config_server_get_ble_config())
         {
 			ble_disable();
@@ -106,9 +98,8 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     else if (event_id == WIFI_EVENT_AP_STADISCONNECTED)
     {
     	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_AP_STADISCONNECTED");
-        wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
         ESP_LOGI(WIFI_TAG, "station "MACSTR" leave, AID=%d",
-                 MAC2STR(event->mac), event->aid);
+                 MAC2STR(((wifi_event_ap_stadisconnected_t*) event_data)->mac), ((wifi_event_ap_stadisconnected_t*) event_data)->aid);
         if(config_server_get_ble_config())
         {
 			ble_enable();

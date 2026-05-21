@@ -19,32 +19,17 @@
  */
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "freertos/event_groups.h"
-#include "esp_timer.h"
+#include "driver/gpio.h"
 #include "esp_bt.h"
-
+#include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
 #include "esp_gatts_api.h"
-#include "esp_bt_defs.h"
-#include "esp_bt_main.h"
-
-#include "esp_system.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
-#include "lwip/sockets.h"
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "esp_gatt_common_api.h"
+
+#include "esp_log_wican.h"
+
 #include "types.h"
 #include "ble.h"
-#include "comm_server.h"
 #include "config_server.h"
 #include "wifi_network.h"
 #include "elm327.h"
@@ -272,8 +257,7 @@ static const esp_gatts_attr_db_t gatt_db[HRS_IDX_NB] =
 
 };
 
-
-
+#if ESP_LOG_MAIN != 0
 static char *esp_key_type_to_str(esp_ble_key_type_t key_type)
 {
    char *key_str = NULL;
@@ -349,6 +333,7 @@ static char *esp_auth_req_to_str(esp_ble_auth_req_t auth_req)
 
    return auth_str;
 }
+#endif
 
 static void show_bonded_devices(void)
 {
@@ -399,9 +384,7 @@ static void ble_send(uint8_t* buf, uint8_t buf_len, int charactValueIndex)
 	if (result != ESP_OK) {
 		ESP_LOGE(GATTS_TABLE_TAG, "esp_ble_gatts_send_indicate() fails: %d", result);
 	} else {
-#ifndef NDEBUG
 		ESP_LOG_BUFFER_HEXDUMP(GATTS_TABLE_TAG, buf, buf_len, ESP_LOG_INFO);
-#endif
 	}
 
 	vTaskDelay(pdMS_TO_TICKS(3)); // prevents Message Integrity Check (MIC) failure (reason = 0x3d)
@@ -551,10 +534,8 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
             }
             break;
         case ESP_GATTS_WRITE_EVT:
-#ifndef NDEBUG
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_WRITE_EVT, write value:");
-            esp_log_buffer_hex(GATTS_TABLE_TAG, param->write.value, param->write.len);
-#endif
+            ESP_LOG_BUFFER_HEX(GATTS_TABLE_TAG, param->write.value, param->write.len);
 
             if(profile_handle_table[IDX_VALUE_COMM_TX] == param->write.handle)
             {
@@ -577,10 +558,6 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 					memcpy(rx_buffer.ucElement, param->write.value + offset, rx_buffer.usLen);
 					if (xQueueSend(*xBle_RX_Queue, &rx_buffer, pdMS_TO_TICKS(20)) != pdTRUE) {
 						ESP_LOGW(GATTS_TABLE_TAG, "BLE rx_queue overflow, tx_queue = %d", uxQueueMessagesWaiting(*xBle_TX_Queue));
-#ifndef NDEBUG
-						rx_buffer.usLen = sprintf((char*)rx_buffer.ucElement, "overflow!!\r");
-						ble_send(rx_buffer.ucElement, rx_buffer.usLen, IDX_VALUE_COMM_RX);
-#endif
 						break;
 					}
 					offset += rx_buffer.usLen;
@@ -992,7 +969,7 @@ void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connecte
 
 	if(xble_handle == NULL)
 	{
-		xTaskCreate(ble_task, "ble_task", 1024*4, (void*)AF_INET, 5, &xble_handle);
+		xTaskCreate(ble_task, "ble_task", 1024*4, NULL, 5, &xble_handle);
 	}
 
 //    esp_log_level_set(GATTS_TABLE_TAG, ESP_LOG_NONE);

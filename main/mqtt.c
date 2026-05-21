@@ -20,44 +20,20 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include  "freertos/queue.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
-#include "esp_wifi.h"
-#include "esp_system.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
-#include <string.h>
-#include "comm_server.h"
+#include "esp_log_wican.h"
 #include "lwip/sockets.h"
 #include "driver/twai.h"
 #include "types.h"
 #include "config_server.h"
-#include "realdash.h"
-#include "slcan.h"
 #include "can.h"
-#include "ble.h"
-#include "wifi_network.h"
-#include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "nvs.h"
-#include "nvs_flash.h"
-#include "sleep_mode.h"
-#include "ble.h"
-#include "esp_sleep.h"
-#include "lwip/sockets.h"
-#include "lwip/dns.h"
-#include "lwip/netdb.h"
 
-#include "esp_log.h"
 #include "mqtt_client.h"
 #include "ver.h"
 #include "cJSON.h"
 #include "wifi_network.h"
 #include "mqtt.h"
-#include <stdbool.h>
-#include <ctype.h>
 #include "esp_timer.h"
 
 #define TAG 		__func__
@@ -336,7 +312,7 @@ static bool evaluate_expression(uint8_t *expression,  uint8_t *data, double V, d
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
     ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%ld", base, event_id);
-    esp_mqtt_event_handle_t event = event_data;
+//    esp_mqtt_event_handle_t event = event_data;
 //    esp_mqtt_client_handle_t client = event->client;
 
     switch ((esp_mqtt_event_id_t)event_id)
@@ -357,13 +333,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 			break;
 
 		case MQTT_EVENT_SUBSCRIBED:
-			ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+			ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", ((esp_mqtt_event_handle_t)event_data)->msg_id);
 			break;
 		case MQTT_EVENT_UNSUBSCRIBED:
-			ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+			ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", ((esp_mqtt_event_handle_t)event_data)->msg_id);
 			break;
 		case MQTT_EVENT_PUBLISHED:
-			ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+			ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", ((esp_mqtt_event_handle_t)event_data)->msg_id);
 			xEventGroupSetBits(s_mqtt_event_group, PUB_SUCCESS_BIT);
 			break;
 		case MQTT_EVENT_DATA:
@@ -382,7 +358,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 	//        }
 			break;
 		default:
-			ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+			ESP_LOGI(TAG, "Other event id:%d", ((esp_mqtt_event_handle_t)event_data)->event_id);
 			break;
     }
 }

@@ -19,48 +19,24 @@
  */
 
 
-
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
-#include "freertos/timers.h"
-#include <nvs_flash.h>
-#include "esp_tls_crypto.h"
-#include "esp_err.h"
 #include "esp_spiffs.h"
-
-#include "config_server.h"
 #include "cJSON.h"
-#include <string.h>
-#include <sys/unistd.h>
-#include <sys/stat.h>
-#include "ver.h"
-
-#include <esp_wifi.h>
-#include <esp_event.h>
-#include <esp_log.h>
-#include <esp_system.h>
-#include <sys/param.h>
-#include "esp_netif.h"
-#include "esp_eth.h"
-#include "lwip/sockets.h"
-#include "esp_websocket_client.h"
-
-#include "esp_http_server.h"
-#include "comm_server.h"
-#include "types.h"
-#include "driver/gpio.h"
-#include "wifi_network.h"
 #include "esp_vfs.h"
 #include "esp_ota_ops.h"
-#include "can.h"
-#include "ble.h"
-#include "sleep_mode.h"
 
 #include "mbedtls/base64.h"
 #include "mbedtls/sha256.h"
 #include "ecc256.h"
 
+#include "types.h"
+#include "config_server.h"
+#include "esp_websocket_client.h"
+#include "wifi_network.h"
+#include "can.h"
+#include "ble.h"
+#include "sleep_mode.h"
+#include "esp_log_wican.h"
 #include "elm327.h"
 
 #define TAG __func__
@@ -1923,9 +1899,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
 					}
 					offset += rx_buffer.usLen;
 				
-			#ifndef NDEBUG
 					ESP_LOG_BUFFER_HEXDUMP(TAG, rx_buffer.ucElement, rx_buffer.usLen, ESP_LOG_INFO);
-			#endif
 				}
 			}
 		}
