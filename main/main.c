@@ -323,6 +323,8 @@ static void can_rx_task(void *pvParameters)
 
 	while(true)
 	{
+		set_can_rx_led(false);
+
 		if (!can_is_enabled()) {
 			vTaskDelay(pdMS_TO_TICKS(10));
 			continue;
@@ -341,42 +343,31 @@ static void can_rx_task(void *pvParameters)
 			ucTCP_TX_Buffer.ucElement[0] = 0;
 			ucTCP_TX_Buffer.usLen = 0;
 
-			if(protocol == OBD_ELM327)
-			{
+			if (protocol == OBD_ELM327) {
 				// if (txQueue == &xmsg_ws_tx_queue && config_server_ws_connected()) {
 				// 	ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 				// } else {
 					ucTCP_TX_Buffer.usLen = elm327_process_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 				// }
 			}
-			else if(protocol == SLCAN)
-			{
+			else if (protocol == SLCAN) {
 				ucTCP_TX_Buffer.usLen = slcan_parse_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 			}
-			else if(protocol == REALDASH)
-			{
+			else if (protocol == REALDASH) {
 				ucTCP_TX_Buffer.usLen = real_dash_set_66(&rx_msg, ucTCP_TX_Buffer.ucElement);
 			}
-			else if(protocol == SAVVYCAN)
-			{
+			else if (protocol == SAVVYCAN) {
 				ucTCP_TX_Buffer.usLen = gvret_parse_can_frame(ucTCP_TX_Buffer.ucElement, &rx_msg);
 			}
 
 			QueueHandle_t* const txQueue = getHostTxQueue();
-			if(txQueue)
-			{
-				if(ucTCP_TX_Buffer.usLen > 0)
-				{
-					if (!host_tx_task((const char*)ucTCP_TX_Buffer.ucElement, ucTCP_TX_Buffer.usLen, txQueue)) {
-						set_can_rx_led(false);
-					}
+			if (txQueue) {
+				if (ucTCP_TX_Buffer.usLen > 0) {
+					host_tx_task((const char*)ucTCP_TX_Buffer.ucElement, ucTCP_TX_Buffer.usLen, txQueue);
 				}
-			}
-			else // no activity on WiCAN
-			{
+			} else { // no activity on WiCAN
 				can_disable();
 				gpio_set_level(CAN_TR_LED_GPIO_NUM, 1); // CAN TR 'off'
-				set_can_rx_led(false);
 			}
 
 			if(mqtt_connected() && mqtt_elm327_log_en == 0)
@@ -401,10 +392,6 @@ static void can_rx_task(void *pvParameters)
 				mqtt_rx_msg.type = MQTT_CAN;
 				xQueueSend( xmsg_mqtt_rx_queue, &mqtt_rx_msg, RESPONSE_TICKS );
 			}
-		}
-		else
-		{
-			set_can_rx_led(false);
 		}
 	}
 }
