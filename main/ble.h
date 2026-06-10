@@ -21,7 +21,7 @@
 #ifndef __BLE_H__
 #define __BLE_H__
 
-void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, int passkey, uint8_t* uid);
+void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, uint32_t passkey, char* uid);
 void ble_disconnect();
 void ble_restart_advertising();
 bool ble_connected(void);
