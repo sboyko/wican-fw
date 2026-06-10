@@ -18,21 +18,21 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <freertos/event_groups.h>
+#include <esp_wifi.h>
+#include <esp_mac.h>
+#include <lwip/sockets.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "freertos/event_groups.h"
-#include "esp_wifi.h"
-#include "esp_mac.h"
 #include "esp_log_wican.h"
-#include "lwip/sockets.h"
 #include "config_server.h"
 #include "ble.h"
+#include "types.h"
 
-#if ESP_LOG_MAIN != 0
-static const char *WIFI_TAG = "wifi_network";
-#endif
+#define WIFI_TAG  __func__
+
 static esp_netif_t* ap_netif;
 static esp_netif_t* sta_netif;
 
@@ -292,7 +292,7 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
     	ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta) );
     	if(xwifi_handle == NULL)
     	{
-    		xTaskCreate(wifi_conn_task, "wifi_conn_task", 4096, (void*)AF_INET, 5, &xwifi_handle);
+    		xTaskCreate(wifi_conn_task, "wifi_conn_task", 1024*3, NULL, 5, &xwifi_handle);
     	}
     }
     else
@@ -301,13 +301,8 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
     }
 
 
-
-    uint8_t derived_mac_addr[6] = {0};
-    ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
-    sprintf((char *)wifi_config_ap.ap.ssid,"WiCAN_%02x%02x%02x%02x%02x%02x",
-            derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-            derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
-    strcpy( (char*)wifi_config_ap.ap.password, (char*)config_server_get_ap_pass());
+    fill_adapter_name((char *)wifi_config_ap.ap.ssid);
+    strcpy( (char*)wifi_config_ap.ap.password, "239239239"/*(char*)config_server_get_ap_pass()*/);
 
     esp_netif_ip_info_t ipInfo;
     IP4_ADDR(&ipInfo.ip, 192,168,80,1);

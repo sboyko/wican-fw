@@ -26,9 +26,7 @@
 #include "esp_log_wican.h"
 #include "esp_timer.h"
 
-#if ESP_LOG_MAIN != 0
-static const char *TAG = "WEBSOCKET_CLIENT";
-#endif
+#define TAG  __func__
 
 #define WEBSOCKET_TCP_DEFAULT_PORT      (80)
 #define WEBSOCKET_SSL_DEFAULT_PORT      (443)
@@ -727,6 +725,8 @@ static void esp_websocket_client_task(void *pv)
             }
         }
     }
+
+    ESP_LOGW(TAG, "exiting task..");
 
     esp_transport_close(client->transport);
     xEventGroupSetBits(client->status_bits, STOPPED_BIT);

@@ -17,13 +17,16 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "freertos/FreeRTOS.h"
-#include "driver/twai.h"
-#include "esp_mac.h"
-#include "esp_ota_ops.h"
-#include "nvs_flash.h"
-#include "esp_wifi.h"
-#include "esp_timer.h"
+#include <freertos/FreeRTOS.h>
+#include <driver/twai.h>
+#include <esp_mac.h>
+#include <esp_ota_ops.h>
+#include <nvs_flash.h>
+#include <esp_wifi.h>
+#include <esp_timer.h>
+
+#include <stdatomic.h>
+#include <ctype.h> // isprint
 
 #include "ver.h"
 #include "types.h"
@@ -44,9 +47,6 @@
 #include "esp_log_wican.h"
 #include "gps_common.h"
 #include "gps_nmea.h"
-
-#include <stdatomic.h>
-
 
 #define TAG  __func__
 
@@ -201,13 +201,15 @@ static void setHostTxQueue(QueueHandle_t* const queue)
 	QueueHandle_t* const old_txQueue = atomic_exchange(&host_txQueue, queue);
 
 	if (queue == NULL && old_txQueue != NULL) {
-		ESP_LOGW(TAG, "Set to NULL");
+		ESP_LOGW(TAG, "to NULL");
+		debug_mem_usage();
 
 		vTaskDelay(pdMS_TO_TICKS(10));
 		xQueueReset(*old_txQueue);
 	}
 
 	if (config_server_get_ble_config()) {
+		// Impotant: when BLE is on then USB sometimes fail under heavy load
 		if (old_txQueue != queue) {
 			if (old_txQueue == &xmsg_uart_tx_queue && queue == NULL) {
 				ble_enable();
@@ -215,6 +217,8 @@ static void setHostTxQueue(QueueHandle_t* const queue)
 			} else if (queue == &xmsg_uart_tx_queue) {
 				ble_disable();
 				ESP_LOGW(TAG, "disable ble");
+			} else if (old_txQueue == &xmsg_ble_tx_queue && queue == NULL) {
+				ble_disconnect();
 			}
 		}
 	}
@@ -225,7 +229,7 @@ static void host_rx_task(void *pvParameters)
 	xdev_buffer rx_buffer;
 	host_rx_last_time = esp_timer_get_time();
 
-	while(1)
+	while(true)
 	{
 		const uint8_t perm_delay = (protocol == OBD_ELM327 ? elm327_perm_delay() : 0);
 
@@ -465,12 +469,61 @@ static void ping_pong_task(void *pvParameters)
 	}
 }
 
-void notify_send_status(bool sent)
+// API (declared in types.h)
+void notify_send_status(const bool sent)
 {
-	// reverse logic - each successful send results in temporary 'off'
 	if (sent) {
-		set_power_led(false);
+		set_power_led(false); // reverse logic - each successful send results in temporary 'off'
 	}
+}
+
+// API (declared in types.h)
+void notify_connection_closed(const dev_channel_t channel)
+{
+	setHostTxQueue(NULL);
+}
+
+// API (declared in types.h)
+void fill_adapter_name(char* name)
+{
+	uint8_t derived_mac_addr[6] = {0};
+	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	sprintf(name, "WiC_%02x%02x%02x%02x%02x%02x",
+		derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+		derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+}
+
+// API (declared in types.h)
+void debug_mem_usage()
+{
+#if ESP_LOG_MAIN != 0	
+	multi_heap_info_t info = {0};
+	heap_caps_get_info(&info, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // internal RAM, memory capable to store data or to create new task
+	// info.total_free_bytes;   // total currently free in all non-continues blocks
+	// info.minimum_free_bytes;  // minimum free ever
+	// info.largest_free_block;   // largest continues block to allocate big array
+
+	ESP_LOGW(TAG, "Total free: %d bytes, Min free: %d bytes, Continues block: %d bytes",
+		info.total_free_bytes, info.minimum_free_bytes, info.largest_free_block);
+
+	// Get the number of tasks
+	const uint32_t task_count = uxTaskGetNumberOfTasks();
+	// Dynamically allocate an array to hold the states
+	TaskStatus_t *task_status_array = malloc(task_count * sizeof(TaskStatus_t));
+	if (task_status_array != NULL) {
+		uxTaskGetSystemState(task_status_array, task_count, NULL);
+
+		for (int i = 0; i < task_count; ++i) {
+			ESP_LOGW(TAG, "Task: %-16s State: %d Priority: %2d Free stack: %d bytes",
+				task_status_array[i].pcTaskName,
+				task_status_array[i].eCurrentState,
+				task_status_array[i].uxCurrentPriority,
+				task_status_array[i].usStackHighWaterMark);
+		}
+		
+		free(task_status_array);
+	}
+#endif
 }
 
 #if ESP_LOG_MAIN != 0
@@ -488,9 +541,6 @@ static char* ensurePrintable(char* str, const int maxLength)
 }
 #endif
 
-static uint8_t derived_mac_addr[6] = {0};
-static uint8_t uid[33];
-static uint8_t ble_uid[33];
 void app_main(void)
 {
 	ESP_ERROR_CHECK(nvs_flash_init());
@@ -522,15 +572,15 @@ void app_main(void)
 
 	esp_ota_mark_app_valid_cancel_rollback();
 
+	char uid[33];
+
+	uint8_t derived_mac_addr[6] = {0};
 	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
-	sprintf((char *)ble_uid,"WiC_%02x%02x%02x%02x%02x%02x",
-			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
-	sprintf((char *)uid,"%02x%02x%02x%02x%02x%02x",
+	sprintf(uid, "%02x%02x%02x%02x%02x%02x",
 			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
 			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
 	
-	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, (char*)&uid[0]);
+	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, uid);
 	slcan_init(&host_tx_task);
 
 	/*
@@ -610,7 +660,7 @@ void app_main(void)
 		can_set_bitrate(can_datarate);
 		xmsg_mqtt_rx_queue = xQueueCreate(32, sizeof(mqtt_can_message_t) );
 		can_enable();
-		mqtt_init((char*)&uid[0], GPIO_NUM_NC, &xmsg_mqtt_rx_queue);
+		mqtt_init(uid, GPIO_NUM_NC, &xmsg_mqtt_rx_queue);
 	}
 //	else if(protocol == MQTT)
 //	{
@@ -618,7 +668,7 @@ void app_main(void)
 //		can_init(CAN_500K);
 //		can_enable();
 //
-//		mqtt_init((char*)&uid[0], GPIO_NUM_NC, &xmsg_mqtt_rx_queue);
+//		mqtt_init(uid, GPIO_NUM_NC, &xmsg_mqtt_rx_queue);
 //	}
 
 
@@ -641,9 +691,12 @@ void app_main(void)
 
 	if(config_server_get_ble_config())
 	{
-		int pass = config_server_ble_pass();
+		char ble_uid[33];
+		fill_adapter_name(ble_uid);
+
+		uint32_t pass = 239239;//config_server_ble_pass(); // BLE standard specifies a 6-digit passkey (0-9) for standard pairing, i.e BLE relies on a strict 6-digit number
 		xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
-		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, pass, &ble_uid[0]);
+		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, pass, ble_uid);
 	}
 
 
@@ -683,7 +736,7 @@ void app_main(void)
 	xTaskCreate(host_rx_task, "host_rx_task", 1024*3, NULL, 5, NULL);
 	xTaskCreate(can_rx_task, "can_rx_task", 1024*3, NULL, 5, NULL);
 	xTaskCreate(nmea_rx_task, "nmea_rx_task", 1024*3, NULL, 5, NULL);
-	xTaskCreate(ping_pong_task, "ping_pong_task", 1024*2, NULL, 5, NULL);
+	xTaskCreate(ping_pong_task, "ping_pong_task", 1024*1, NULL, 5, NULL);
 
 	// temporary disable due to conflict with setup_uart_usb(..) in 'wc_uart.c'
 	/*

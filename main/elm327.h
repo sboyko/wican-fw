@@ -22,11 +22,12 @@
 #ifndef __ELM327__
 #define __ELM327__
 
-#include "hal/twai_types.h"
-#include "types.h"
+#include <hal/twai_types.h>
 
 #define ELM327_CAN_RX   0x01
 #define ELM327_CAN_TX   0x02
+
+typedef struct __xdev_buffer xdev_buffer;
 
 void elm327_init(bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type), int terminal_resistor_led);
 void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q, int (*fnHasNewData)());

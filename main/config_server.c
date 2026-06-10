@@ -19,25 +19,26 @@
  */
 
 
-#include "freertos/FreeRTOS.h"
-#include "esp_spiffs.h"
-#include "cJSON.h"
-#include "esp_vfs.h"
-#include "esp_ota_ops.h"
+#include <freertos/FreeRTOS.h>
+#include <esp_spiffs.h>
+#include <cJSON.h>
+#include <esp_vfs.h>
+#include <esp_ota_ops.h>
+#include <esp_tls_crypto.h>
+#include <esp_http_server.h>
+#include <mbedtls/base64.h>
+#include <mbedtls/sha256.h>
 
-#include "mbedtls/base64.h"
-#include "mbedtls/sha256.h"
+#include "esp_log_wican.h"
 #include "ecc256.h"
-
-#include "types.h"
-#include "config_server.h"
 #include "esp_websocket_client.h"
+#include "config_server.h"
 #include "wifi_network.h"
 #include "can.h"
 #include "ble.h"
 #include "sleep_mode.h"
-#include "esp_log_wican.h"
 #include "elm327.h"
+#include "types.h"
 
 #define TAG __func__
 
@@ -2008,8 +2009,8 @@ void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, i
         config_server_init();
 		server = config_httpd_start();
 
-        xTaskCreate(ws_tx_task, "ws_tx_task", 1024*4, (void*)AF_INET, 5, &ws_tx_task_handle);
-        xTaskCreate(ws_server_rx_task, "ws_server_rx_task", 1024*4, (void*)AF_INET, 5, NULL);
+        xTaskCreate(ws_tx_task, "ws_tx_task", 1024*4, NULL, 5, &ws_tx_task_handle);
+        xTaskCreate(ws_server_rx_task, "ws_server_rx_task", 1024*3, NULL, 5, NULL);
 
     }
 }

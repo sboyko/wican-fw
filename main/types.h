@@ -32,7 +32,7 @@ typedef enum
 	DEV_WIFI_WS,
 	DEV_BLE,
 	DEV_UART
-}dev_channel_t;
+} dev_channel_t;
 
 
 typedef struct __xdev_buffer
@@ -40,10 +40,20 @@ typedef struct __xdev_buffer
 	int usLen;
 	uint8_t ucElement[DEV_BUFFER_LENGTH];
 	dev_channel_t dev_channel;
-}xdev_buffer;
+} xdev_buffer;
 
-// Notifies status of send() task (both CAN and K-Line).
+// Updates status of recent send() task (both CAN and K-Line).
 // Called from elm327 commands processor.
-void notify_send_status(bool sent);
+void notify_send_status(const bool sent);
+
+// Updates connection status with 'channel'.
+// Note that some channels cannot detect closing event (USB for example).
+void notify_connection_closed(const dev_channel_t channel);
+
+// Fills name (unique, based on MAC address) of this adapter
+void fill_adapter_name(char* name);
+
+// Prints (via ESP_LOGI) overall memory usage and the list of all tasksk with uxTaskGetStackHighWaterMark
+void debug_mem_usage();
 
 #endif

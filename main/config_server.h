@@ -19,25 +19,10 @@
  */
 
 
-
 #pragma once
-#include "esp_tls_crypto.h"
-#include <esp_http_server.h>
 
 #define AP_MODE				0
 #define APSTA_MODE			1
-
-#define CAN_5K				0
-#define CAN_10K				1
-#define CAN_20K				2
-#define CAN_25K				3
-#define CAN_50K				4
-#define CAN_100K			5
-#define CAN_125K			6
-#define CAN_250K			7
-#define CAN_500K			8
-#define CAN_800K			9
-#define CAN_1000K			10
 
 #define CAN_NORMAL			0
 #define CAN_SILENT			1

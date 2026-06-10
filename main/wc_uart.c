@@ -29,6 +29,7 @@
 #include "elm327.h"
 #include "wc_uart.h"
 #include "gps_common.h"
+#include "types.h"
 
 
 typedef enum {
@@ -286,7 +287,7 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
     // Note: looks like one task is faster then two separate tasks
     //
     //xTaskCreate(uart_tx_task, "uart_tx_task", 1024*2, NULL, 5, NULL);
-    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*4, NULL, 5, NULL);
+    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*2, NULL, 5, NULL);
 }
 
 // API

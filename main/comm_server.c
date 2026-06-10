@@ -18,13 +18,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "freertos/FreeRTOS.h"
-#include "driver/gpio.h"
-#include "lwip/sockets.h"
+#include <freertos/FreeRTOS.h>
+#include <driver/gpio.h>
+#include <lwip/sockets.h>
 
 #include "esp_log_wican.h"
-#include "types.h"
 #include "comm_server.h"
+#include "types.h"
 
 #define TAG 		__func__
 
@@ -48,7 +48,6 @@ static uint8_t udp_enable = 0;
 
 static void tcp_server_rx_task(void *pvParameters)
 {
-//	int addr_family = (int)pvParameters;
     xdev_buffer rx_buffer;
 	rx_buffer.dev_channel = DEV_WIFI;
 	char ws_data[512];
@@ -102,8 +101,6 @@ wait_skt_rx:
 
 static void udp_server_rx_task(void *pvParameters)
 {
-//	int addr_family = (int)pvParameters;
-//    int len;
     xdev_buffer rx_buffer;
 
 wait_skt_rx:
@@ -147,7 +144,6 @@ wait_skt_rx:
 
 static void udp_server_tx_task(void *pvParameters)
 {
-//	int addr_family = (int)pvParameters;
 	xdev_buffer tx_buffer;
 	struct sockaddr_in Recv_addr;
 
@@ -186,7 +182,6 @@ wait_skt_tx:
 
 static void tcp_server_tx_task(void *pvParameters)
 {
-//	int addr_family = (int)pvParameters;
 	xdev_buffer tx_buffer;
 	char ws_data[512];
 
@@ -246,7 +241,7 @@ char rx_buffer[128];
 static void tcp_server_task(void *pvParameters)
 {
     char addr_str[128];
-    int addr_family = (int)pvParameters;
+    int addr_family = AF_INET;
     int ip_protocol = 0;
     int keepAlive = 1;
     int keepIdle = KEEPALIVE_IDLE;
@@ -344,6 +339,7 @@ accept_socket:
 					  portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
 			xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 			ESP_LOGI(TAG, "Socket disconnected...");
+			notify_connection_closed(DEV_WIFI);
 			gpio_set_level(conn_led, 1);
 			shutdown(sock, 0);
 			close(sock);
@@ -441,16 +437,16 @@ int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *
 	xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 	xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 	udp_enable = udp_en;
-	xTaskCreate(tcp_server_task, "tcp_server", 4096, (void*)AF_INET, 5, &xserver_handle);
+	xTaskCreate(tcp_server_task, "tcp_server", 1024*3, NULL, 5, &xserver_handle);
 	if(!udp_enable)
 	{
-		xTaskCreate(tcp_server_rx_task, "tcp_rx_server", 4096, (void*)AF_INET, 5, &xrx_handle);
-		xTaskCreate(tcp_server_tx_task, "tcp_tx_server", 4096, (void*)AF_INET, 5, &xtx_handle);
+		xTaskCreate(tcp_server_rx_task, "tcp_rx_server", 1024*3, NULL, 5, &xrx_handle);
+		xTaskCreate(tcp_server_tx_task, "tcp_tx_server", 1024*3, NULL, 5, &xtx_handle);
 	}
 	else
 	{
-		xTaskCreate(udp_server_rx_task, "udp_rx_server", 4096, (void*)AF_INET, 5, &xrx_handle);
-		xTaskCreate(udp_server_tx_task, "udp_tx_server", 4096, (void*)AF_INET, 5, &xtx_handle);
+		xTaskCreate(udp_server_rx_task, "udp_rx_server", 1024*3, NULL, 5, &xrx_handle);
+		xTaskCreate(udp_server_tx_task, "udp_tx_server", 1024*3, NULL, 5, &xtx_handle);
 	}
 	return 0;
 }

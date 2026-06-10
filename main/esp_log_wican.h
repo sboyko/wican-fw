@@ -3,6 +3,8 @@
 
 #include "esp_log.h"
 
+// Note: don't forget to turn off 'configUSE_TRACE_FACILITY' option
+
 // typedef enum {
 //     ESP_LOG_NONE    = 0,    /*!< No log output */
 //     ESP_LOG_ERROR   = 1,    /*!< Critical errors, software module can not recover on its own */
