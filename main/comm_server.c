@@ -26,7 +26,7 @@
 #include "comm_server.h"
 #include "types.h"
 
-#define TAG 		__func__
+#define TAG  __func__
 
 #define KEEPALIVE_IDLE              5
 #define KEEPALIVE_INTERVAL          5

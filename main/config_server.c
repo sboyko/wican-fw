@@ -40,7 +40,7 @@
 #include "elm327.h"
 #include "types.h"
 
-#define TAG __func__
+#define TAG  __func__
 
 #define WIFI_CONNECTED_BIT          BIT0
 #define WS_HANDLER_CONNECTED_BIT    BIT1

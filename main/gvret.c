@@ -38,7 +38,7 @@
 #include "gvret.h"
 #include "comm_server.h"
 
-#define TAG 		__func__
+#define TAG  __func__
 
 static SystemSettings SysSettings;
 static EEPROMSettings settings;

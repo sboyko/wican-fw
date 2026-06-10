@@ -31,7 +31,7 @@
 #include "ble.h"
 #include "types.h"
 
-#define WIFI_TAG  __func__
+#define TAG  __func__
 
 static esp_netif_t* ap_netif;
 static esp_netif_t* sta_netif;
@@ -56,12 +56,12 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
     {
-    	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_STA_START");
+    	ESP_LOGI(TAG, "WIFI_EVENT_STA_START");
         esp_wifi_connect();
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-    	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_STA_DISCONNECTED");
+    	ESP_LOGI(TAG, "WIFI_EVENT_STA_DISCONNECTED");
     	config_server_wifi_connected(0);
 
     	xEventGroupSetBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
@@ -70,9 +70,9 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
-    	ESP_LOGI(WIFI_TAG, "IP_EVENT_STA_GOT_IP");
+    	ESP_LOGI(TAG, "IP_EVENT_STA_GOT_IP");
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(WIFI_TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
 
         sprintf(sta_ip, "%d.%d.%d.%d", IP2STR(&event->ip_info.ip));
 
@@ -86,29 +86,29 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
 
     if (event_id == WIFI_EVENT_AP_STACONNECTED)
     {
-    	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_AP_STACONNECTED");
-        ESP_LOGI(WIFI_TAG, "station "MACSTR" join, AID=%d",
+    	ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED");
+        ESP_LOGI(TAG, "station "MACSTR" join, AID=%d",
                  MAC2STR(((wifi_event_ap_staconnected_t*) event_data)->mac), ((wifi_event_ap_staconnected_t*) event_data)->aid);
         if(config_server_get_ble_config())
         {
 			ble_disable();
-			ESP_LOGW(WIFI_TAG, "disable ble");
+			ESP_LOGW(TAG, "disable ble");
         }
     }
     else if (event_id == WIFI_EVENT_AP_STADISCONNECTED)
     {
-    	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_AP_STADISCONNECTED");
-        ESP_LOGI(WIFI_TAG, "station "MACSTR" leave, AID=%d",
+    	ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED");
+        ESP_LOGI(TAG, "station "MACSTR" leave, AID=%d",
                  MAC2STR(((wifi_event_ap_stadisconnected_t*) event_data)->mac), ((wifi_event_ap_stadisconnected_t*) event_data)->aid);
         if(config_server_get_ble_config())
         {
 			ble_enable();
-			ESP_LOGW(WIFI_TAG, "enable ble");
+			ESP_LOGW(TAG, "enable ble");
         }
     }
     else if(event_id == WIFI_EVENT_AP_START)
     {
-    	ESP_LOGI(WIFI_TAG, "WIFI_EVENT_AP_START");
+    	ESP_LOGI(TAG, "WIFI_EVENT_AP_START");
     }
 }
 
@@ -122,7 +122,7 @@ void wifi_network_deinit(void)
 
 	xEventGroupClearBits(s_wifi_event_group, WIFI_INIT_BIT);
 
-	ESP_LOGW(WIFI_TAG, "wifi deinit");
+	ESP_LOGW(TAG, "wifi deinit");
 
 	esp_wifi_disconnect();
     esp_err_t err = esp_wifi_stop();
@@ -162,7 +162,7 @@ void wifi_network_restart(void)
     }
     esp_wifi_connect();
 
-    ESP_LOGW(WIFI_TAG, "WiFi restarted");
+    ESP_LOGW(TAG, "WiFi restarted");
 }
 bool wifi_network_is_connected(void)
 {
@@ -185,7 +185,7 @@ static void wifi_conn_task(void *pvParameters)
 		            pdFALSE,
 		            pdTRUE,
 		            portMAX_DELAY);
-		ESP_LOGI(WIFI_TAG, "Trying to connect...");
+		ESP_LOGI(TAG, "Trying to connect...");
 		xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECT_IDLE_BIT);
 		esp_wifi_connect();
 		xEventGroupWaitBits(s_wifi_event_group,
@@ -220,7 +220,7 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
 	{
 		channel = 6;
 	}
-	ESP_LOGI(WIFI_TAG, "AP Channel: %d", channel);
+	ESP_LOGI(TAG, "AP Channel: %d", channel);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -319,6 +319,6 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
     xEventGroupSetBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
     xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECT_IDLE_BIT);
 //    esp_wifi_connect();
-    ESP_LOGI(WIFI_TAG, "wifi_init finished.");
+    ESP_LOGI(TAG, "wifi_init finished.");
 
 }

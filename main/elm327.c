@@ -29,7 +29,7 @@
 
 #include <ctype.h>
 
-#define TAG 		__func__
+#define TAG  __func__
 
 static QueueHandle_t can_rx_queue;
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL;
