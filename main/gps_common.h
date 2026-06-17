@@ -23,7 +23,8 @@ bool gps_serial_send_buffer(const char* str, const uint16_t length);
 // Разрешение на использование GPS
 void gps_wait_enabled(const uint32_t xTicksToWait);
 
-void gps_set_enabled(const bool isEnabledNotDisabled);
+void gps_set_enabled(const bool isEnabledNotDisabled, const bool isDebug);
 
+bool gps_is_debug();
 
 #endif // gps_common_h

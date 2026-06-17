@@ -118,7 +118,9 @@ void gps_wait_enabled(const uint32_t xTicksToWait)
 	}
 }
 
-void gps_set_enabled(const bool isEnabledNotDisabled)
+static bool isDebugUnknowSentences = false;
+
+void gps_set_enabled(const bool isEnabledNotDisabled, const bool isDebug)
 {
 	if (s_gps_event_group != NULL) {
 		if (isEnabledNotDisabled) {
@@ -127,4 +129,11 @@ void gps_set_enabled(const bool isEnabledNotDisabled)
 			xEventGroupClearBits(s_gps_event_group, GPS_ENABLED_BIT);
 		}
 	}
+
+	isDebugUnknowSentences = isDebug;
+}
+
+bool gps_is_debug()
+{
+	return isDebugUnknowSentences;
 }

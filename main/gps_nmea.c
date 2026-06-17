@@ -3,11 +3,12 @@
 // Последнюю версию библиотеки Вы можете скачать по ссылке: https://iarduino.ru/file/538.html
 // Подробное описание функций бибилиотеки доступно по ссылке: https://wiki.iarduino.ru/page/NMEA-protocol-parser/
 
-#include "gps_common.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <esp_timer.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_timer.h"
+#include "gps_common.h"
+#include "gps_nmea.h"
 #include "types.h"
 
 #include <ctype.h>
@@ -140,7 +141,12 @@ void gps_nmea_init(bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q)
 }
 
 // API
-void gps_nmea_read_sentence(const uint32_t timeoutMs, void (*process_nmea_sentence)(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q), QueueHandle_t* (*tx_queue)())
+void gps_nmea_read_sentence(
+	const uint32_t timeoutMs,
+	bool (*process_nmea_sentence)(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q),
+	QueueHandle_t* (*tx_queue)(),
+	const bool debugUnknowSentences
+)
 {
 	// Максимальная длина одного сообщения (предложения) NMEA 0183 (версии 3.0 и выше) ограничена 83 символами.
 	// Сообщение не должно превышать 80 байт данных, плюс символы начала ($) и конца (<CR><LF>), что в сумме дает 83 символа.
@@ -218,12 +224,15 @@ void gps_nmea_read_sentence(const uint32_t timeoutMs, void (*process_nmea_senten
 	}
 	QueueHandle_t* q = tx_queue();
 	if (q) {
-		process_nmea_sentence(nmeaSentence, sentencePos, q);
+		const bool processed = process_nmea_sentence(nmeaSentence, sentencePos, q);
+		if (!processed && sentencePos > 5 && debugUnknowSentences) {
+			gps_nmea_debug_process_sentence(nmeaSentence, sentencePos, q);
+		}
 	}
 }
 
 // API (for debugging)
-void gps_nmea_debug_process_sentence(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q)
+bool gps_nmea_debug_process_sentence(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q)
 {
 	for (uint16_t i = 0; i < dataLength; ++i) { // un-split sentence fields
 		if (data[i] == '\0') {
@@ -235,15 +244,17 @@ void gps_nmea_debug_process_sentence(const uint8_t* data, const uint16_t dataLen
 	nmea_response("_debug_", 0, q);
 	nmea_response((const char*)data, dataLength, q);
 	nmea_response("\r", 0, q);
+
+	return true;
 }
 
 // API
-void gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q)
+bool gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q)
 {
 	// NMEA sentence start with 5-letter message identifier. 
 	// The first two letters identify the message source, and the next three letters identify the message format, according to the specific version of the NMEA 0183 protocol.
 	if (dataLength < 6) {
-		return;
+		return false;
 	}
 
 	if (toupper(data[2]) == 'R' && toupper(data[3]) == 'M' && toupper(data[4]) == 'C') {
@@ -251,19 +262,19 @@ void gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, Q
 		if (_process_nmea_RMC(data + 6, dataLength - 6, &msgData)) {
 			// serialize
 			char buff[DEV_BUFFER_LENGTH];
-			snprintf(buff, sizeof(buff), "%sRMC_%u_%.8g_%.8g_%.3g\r",
+			snprintf(buff, sizeof(buff), "%sRMC_%c%c_%u_%.8g_%.8g_%.3g\r",
 				GPS_REPLY_HEADER,
+				data[0], data[1], 
 				(unsigned int)msgData.m_utcInMs,
 				msgData.m_latitude,  // 8 decimal points are sub-centimeter surveyor level
 				msgData.m_longitude, // 8 decimal points are sub-centimeter surveyor level
 				msgData.m_speed
 			);
 			nmea_response(buff, 0, q);
-			return;
+			return true;
 		}
 	}
-
-	gps_nmea_debug_process_sentence(data, dataLength, q);
+	return false;
 }
 
 // API

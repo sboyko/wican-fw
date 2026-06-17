@@ -1392,8 +1392,8 @@ static void elm327_kline_request(const char *cmd, const size_t cmd_len, QueueHan
 
 static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
 {
-	if (!strncmp(cmd, "off", 3)) {
-		gps_set_enabled(false); // pause 'nmea_rx_task'
+	if (strncmp(cmd, "off", 3) == 0) {
+		gps_set_enabled(false, false); // pause 'nmea_rx_task'
 		vTaskDelay(pdMS_TO_TICKS(20));
 		
 		wc_gps_update(false); // switch to USB (if not K-Line of course)
@@ -1404,7 +1404,8 @@ static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandl
 		return;
 	}
 
-	gps_set_enabled(true); // resume 'nmea_rx_task'
+	const bool isDebugUnknowSentences = (strncmp(cmd, "dbg", 3) == 0);
+	gps_set_enabled(true, isDebugUnknowSentences); // resume 'nmea_rx_task'
 }
 
 // API
@@ -1600,7 +1601,7 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 
 	if (len > 4 && memcmp(buf, "AT WS", 5) == 0) {
 		cmd_buffer_len = 0;
-		gps_set_enabled(false); // pause 'nmea_rx_task'
+		gps_set_enabled(false, false); // pause 'nmea_rx_task'
 	}
 
 	for(int i = 0; i < len; i++)

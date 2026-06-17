@@ -406,10 +406,21 @@ static void nmea_rx_task(void *pvParameters)
 	// $PCAS02,1000  // gps_select_updaterate(1) - УСТАНОВКА ЧАСТОТЫ ОБНОВЛЕНИЯ ДАННЫХ (1 раз в секунду)
 	// $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0  // gps_select_composition(NMEA_RMC) - УСТАНОВКА СОСТАВА ПАКЕТА NMEA
 	// $PCAS10,0  // gps_reset(0) (0 - HOT_START, 1 - WARM_START, 2 - COLD_START, 3 - FACTORY_SET)
+	/*
 	char gps_init_commands[] = "\
 $PCAS02,1000\r\
 $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
 ";
+	*/
+
+	// commands (GPS модуль GT-502GG):
+	// $PMTK220,1000 - Position Fix Interval (Packet Type: 220 PMTK_SET_POS_FIX)
+	// $PMTK314,1,1,1,1,1,5,0,0,0,0,0,0,0,0,0,0,0,1,0 -  totally 19 data fields that present output frequencies for the 19 supported NMEA sentences individually (Packet Type: 314 PMTK_API_SET_NMEA_OUTPUT)
+	char gps_init_commands[] = "\
+$PMTK220,1000\r\
+$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
+";
+
 	const int gps_uart_baudRate = 9600;
 	const int gps_uart_parity = 0;
 	const int gps_uart_dataBits = 8;
@@ -424,7 +435,7 @@ $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
 
 		QueueHandle_t* const txQueue = getHostTxQueue();
 		if (txQueue == NULL) { // no activity on WiCAN
-			gps_set_enabled(false); // pause 'nmea_rx_task'
+			gps_set_enabled(false, false); // pause 'nmea_rx_task'
 			wc_gps_update(false); // switch to USB (if not K-Line of course)
 			continue;
 		}
@@ -444,7 +455,7 @@ $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
 		}
 
 		wc_gps_update(true);
-		gps_nmea_read_sentence(2000, /*gps_nmea_debug_process_sentence*/gps_nmea_process_sentence, getHostTxQueue);
+		gps_nmea_read_sentence(2000, /*gps_nmea_debug_process_sentence*/gps_nmea_process_sentence, getHostTxQueue, gps_is_debug());
 	}
 }
 
@@ -496,7 +507,7 @@ void fill_adapter_name(char* name)
 // API (declared in types.h)
 void debug_mem_usage()
 {
-#if ESP_LOG_MAIN != 0	
+#if ( configUSE_TRACE_FACILITY == 1 )
 	multi_heap_info_t info = {0};
 	heap_caps_get_info(&info, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // internal RAM, memory capable to store data or to create new task
 	// info.total_free_bytes;   // total currently free in all non-continues blocks
