@@ -1347,7 +1347,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 
 static void elm327_kline_baud(const char* command_str, QueueHandle_t *q)
 {
-	// restore spaces for sscanf
+	// restore spaces for sscanf from "BAUD 57600" / "BAUD 10400_0_8_0_1"
 	char *p = (char*)&command_str[4];
 	while ((p = strchr(p, '_')) != NULL) {
 		*p = ' ';
@@ -1388,6 +1388,125 @@ static void elm327_kline_request(const char *cmd, const size_t cmd_len, QueueHan
  	} else {
 		elm327_kline_send(cmd, cmd_len, q, fnHasNewData);
 	}
+}
+
+static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
+{
+	// restore spaces for sscanf from "data_expectedReplySize_timeoutMs"
+	char *p = (char*)cmd;
+	while ((p = strchr(p, '_')) != NULL) {
+		*p = ' ';
+	}
+
+	size_t dataSize = 0;
+	int expectedReplySize = 0;
+	int timeoutMs = 0;
+
+	p = (char*)cmd;
+	if ((p = strchr(p, ' ')) != NULL) {
+		*p = '\0';
+		dataSize = (p - cmd) / 2;
+		
+		sscanf(p + 1, "%d %d", &expectedReplySize, &timeoutMs);
+	} else {
+		dataSize = cmd_len / 2;
+	}
+
+	// prepare COMM data
+	const int kwp_bytes_count = MIN(dataSize, KWP_COMMAND_LENGHT);
+	if (kwp_bytes_count == 0) {
+		elm327_response("com_empty_message_ CAN ERROR\r>", 0, q);
+		return;
+	}
+
+	char rsp[KWP_COMMAND_LENGHT];
+	elm327_fill_data_from_hex_str(cmd, (uint8_t *) rsp, kwp_bytes_count);
+
+	// clear incoming queue
+	xQueueReset(*xuart_rx_queue);
+
+	// send KWP message
+	if (!elm327_response(rsp, kwp_bytes_count, xuart_tx_queue)) {
+		elm327_response("com_send_fails_ CAN ERROR\r>", 0, q);
+		notify_send_status(false);
+		return;
+	} else {
+		notify_send_status(true);
+	}
+
+	if (expectedReplySize == 0) {
+		return;
+	}
+
+	const int64_t endTime = esp_timer_get_time() + timeoutMs * 1000;
+
+	xdev_buffer xsend_buffer;
+	int echo_length = (elm327_config.kline_monoline == 1 ? kwp_bytes_count : 0);
+	int offset = 0;
+
+	int recvCount = 0;
+	while (recvCount < abs(expectedReplySize)) {
+		if (endTime < esp_timer_get_time()) {
+			return; // timeout
+		}
+		if (fnHasNewData()) {
+			return; // reset by incoming data
+		}
+
+		if (xQueueReceive(*xuart_rx_queue, &xsend_buffer, pdMS_TO_TICKS(timeoutMs))) {
+			const int data_offset = echo_length;
+			if (echo_length > 0) { // check echo bytes
+				const int echo_offset = (kwp_bytes_count - echo_length);
+				for (int i = 0, in = MIN(echo_length, xsend_buffer.usLen); i < in; ++i) {
+					if (rsp[echo_offset + i] != xsend_buffer.ucElement[i]) {
+						elm327_response("com_echo_mismatch_ CAN ERROR\r>", 0, q);
+						return;
+					}
+				}
+
+				if (echo_length > xsend_buffer.usLen) {
+					echo_length -= xsend_buffer.usLen;
+					continue;
+				} else {
+					xsend_buffer.usLen -= echo_length;
+					echo_length = 0;
+
+					rsp[0] = 0;
+					strcat(rsp, "com");
+					offset = 3;
+				}
+			}
+
+			recvCount += xsend_buffer.usLen;
+
+			for (int i = 0; i < xsend_buffer.usLen; ++i) {
+				offset += sprintf(rsp + offset, "%02X", xsend_buffer.ucElement[i + data_offset]);
+			}
+		}
+	}
+
+	if (expectedReplySize < 0) { // read all remaining bytes
+		while (xQueueReceive(*xuart_rx_queue, &xsend_buffer, 5)) {
+			for (int i = 0; i < xsend_buffer.usLen; ++i) {
+				offset += sprintf(rsp + offset, "%02X", xsend_buffer.ucElement[i]);
+			}
+		}
+	}
+
+	strcat(rsp, "\r");
+	elm327_response(rsp, 0, q);
+}
+
+static void elm327_comm_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
+{
+	if (xuart_tx_queue == q) { // protection against simulteneous use of USB and KLine
+		elm327_response("com_simulteneous_use_of_USB_and_KLine_ CAN ERROR\r>", 0, q);
+		return;
+	}
+
+	wc_kline_update(true);
+
+	elm327_comm_send(cmd, cmd_len, q, fnHasNewData);
 }
 
 static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
@@ -1618,6 +1737,10 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 			if(!strncmp(cmd_buffer, "kwp", 3))
 			{
 				elm327_kline_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
+			}
+			else if(!strncmp(cmd_buffer, "com", 3))
+			{
+				elm327_comm_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
 			}
 			else if(!strncmp(cmd_buffer, "gps", 3))
 			{
