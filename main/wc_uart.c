@@ -18,14 +18,16 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "esp_system.h"
-#include "esp_timer.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
+#include <esp_system.h>
+#include <esp_timer.h>
+#include <driver/uart.h>
+#include <driver/gpio.h>
+
 #include "esp_log_wican.h"
-#include "driver/uart.h"
-#include "driver/gpio.h"
+#include "config_server.h"
 #include "elm327.h"
 #include "wc_uart.h"
 #include "gps_common.h"
@@ -54,7 +56,7 @@ static UartMode request_uart_mode = UART_USB;
 static int request_uart_baud = 0;
 static int64_t uart_mode_time = 0;
 
-static const uart_config_t usb_uart_config = {
+static uart_config_t usb_uart_config = {
     .baud_rate = UART_USB_BAUDRATE,
     .data_bits = UART_DATA_8_BITS,
     .parity = UART_PARITY_DISABLE,
@@ -282,6 +284,7 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
 
     gps_serial_init(xuart_tx_queue, &gps_rx_queue);
 
+    usb_uart_config.baud_rate = config_server_get_uart_baudrate();
     setup_uart_usb(&usb_uart_config);
 
     // Note: looks like one task is faster then two separate tasks

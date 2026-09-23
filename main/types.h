@@ -50,7 +50,8 @@ void notify_send_status(const bool sent);
 // Note that some channels cannot detect closing event (USB for example).
 void notify_connection_closed(const dev_channel_t channel);
 
-// Fills name (unique, based on MAC address) of this adapter
+// Fills adapter name for BLE and Wifi_AP.
+// Adapter name format is 'WiC_<config_server_get_wic_name()>.<MAC_address>' (i.e. 'WiC_MyName.562e5fd68549').
 void fill_adapter_name(char* name);
 
 // Prints (via ESP_LOGI) overall memory usage and the list of all tasksk with uxTaskGetStackHighWaterMark

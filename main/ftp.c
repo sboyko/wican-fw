@@ -75,9 +75,9 @@ esp_netif_t *net_if[MAX_ACTIVE_INTERFACES];
  DECLARE PRIVATE DATA
  ******************************************************************************/
 static ftp_data_t ftp_data = {0};
-static char *ftp_path = NULL;
-static char *ftp_scratch_buffer = NULL;;
-static char *ftp_cmd_buffer = NULL;
+static char* ftp_path = NULL;
+static char* ftp_scratch_buffer = NULL;
+static char* ftp_cmd_buffer = NULL;
 static uint8_t ftp_nlist = 0;
 static const ftp_cmd_t ftp_cmd_table[] = { { "FEAT" }, { "SYST" }, { "CDUP" }, { "CWD"	},
 										   { "PWD"	}, { "XPWD" }, { "SIZE" }, { "MDTM" },

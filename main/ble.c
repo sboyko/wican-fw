@@ -85,7 +85,7 @@ static uint8_t adv_config_done = 0;
 #define BLE_ATT_DATA_MIN_SIZE                     20
 #define BLE_ATT_DATA_MAX_SIZE                     240 // intentionally smaller then 242 to prevents Message Integrity Check (MIC) failure (reason = 0x3d)
 
-static uint8_t dev_name[32] = {0};
+static uint8_t dev_name[32] = {0}; // sync with ESP_GAP_DEVICE_NAME_MAX(32)
 static uint8_t manufacturer[]="MeatPi";
 
 static uint16_t profile_handle_table[HRS_IDX_NB];
@@ -260,7 +260,7 @@ static const esp_gatts_attr_db_t gatt_db[HRS_IDX_NB] =
 };
 
 #if ESP_LOG_MAIN != 0
-static char *esp_key_type_to_str(esp_ble_key_type_t key_type)
+static char* esp_key_type_to_str(esp_ble_key_type_t key_type)
 {
    char *key_str = NULL;
    switch(key_type) {
@@ -300,7 +300,7 @@ static char *esp_key_type_to_str(esp_ble_key_type_t key_type)
    return key_str;
 }
 
-static char *esp_auth_req_to_str(esp_ble_auth_req_t auth_req)
+static char* esp_auth_req_to_str(esp_ble_auth_req_t auth_req)
 {
    char *auth_str = NULL;
    switch(auth_req) {
@@ -558,7 +558,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 				esp_gatt_rsp_t rsp = {0};
             	rsp.attr_value.handle = param->read.handle;
             	rsp.attr_value.len = 1;
-            	rsp.attr_value.value[0] = config_server_get_ble_config();
+            	rsp.attr_value.value[0] = ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE);
 				const esp_err_t result = esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, param->reg.status, &rsp);
 				if (result != ESP_OK) {
 					ESP_LOGE(TAG, "esp_ble_gatts_send_response(status) fails: %d", result);

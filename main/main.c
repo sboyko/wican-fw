@@ -208,7 +208,7 @@ static void setHostTxQueue(QueueHandle_t* const queue)
 		xQueueReset(*old_txQueue);
 	}
 
-	if (config_server_get_ble_config()) {
+	if ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
 		// Impotant: when BLE is on then USB sometimes fail under heavy load
 		if (old_txQueue != queue) {
 			if (old_txQueue == &xmsg_uart_tx_queue && queue == NULL) {
@@ -246,7 +246,7 @@ static void host_rx_task(void *pvParameters)
 					setHostTxQueue(NULL);
 					// esp_restart();
 				} else {
-					if (config_server_get_ble_config()) {
+					if ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
 						ble_restart_advertising();
 					}
 				}
@@ -497,9 +497,13 @@ void notify_connection_closed(const dev_channel_t channel)
 // API (declared in types.h)
 void fill_adapter_name(char* name)
 {
+	const char* adapter_name = config_server_get_wic_name();
+
 	uint8_t derived_mac_addr[6] = {0};
 	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
-	sprintf(name, "WiC_%02x%02x%02x%02x%02x%02x",
+	snprintf(name, 32, "WiC_%s%s%02x%02x%02x%02x%02x%02x",
+		adapter_name, // up to 14 = 32 - 1('\0') - 6*2 - 1('.') - 4('WiC_')
+		(strlen(adapter_name) > 0 ? "." : ""),
 		derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
 		derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
 }
@@ -683,33 +687,23 @@ void app_main(void)
 //	}
 
 
-	const bool use_modem = true;
-	wifi_network_init(use_modem ? "WiCANabitabit" : NULL, use_modem ? "airabit123" : NULL);
-	int32_t port = config_server_get_port();
+	wifi_network_init();
 
-	if(port == -1)
+	if((config_server_get_wic_hsi() & WIC_HSI_WIFI) == WIC_HSI_WIFI)
 	{
-		port = 3333;
-	}
-	if(config_server_get_port_type() == UDP_PORT)
-	{
-		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, GPIO_NUM_NC, 1);
-	}
-	else
-	{
-		tcp_server_init(port, &xMsg_Tx_Queue, &xMsg_Rx_Queue, GPIO_NUM_NC, 0);
+		tcp_server_init(config_server_get_wifi_ap_port(), &xMsg_Tx_Queue, &xMsg_Rx_Queue, GPIO_NUM_NC,
+			config_server_get_wifi_ap_proto() == UDP_PORT ? 1 : 0);
 	}
 
-	if(config_server_get_ble_config())
+	if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
 	{
-		char ble_uid[33];
+		char ble_uid[32]; // sync with wifi_ap_config_t.ssid[32] from 'esp_wifi_types_generic.h'
 		fill_adapter_name(ble_uid);
 
-		uint32_t pass = 239239;//config_server_ble_pass(); // BLE standard specifies a 6-digit passkey (0-9) for standard pairing, i.e BLE relies on a strict 6-digit number
+		uint32_t pass = config_server_get_ble_pass();
 		xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
 		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, pass, ble_uid);
 	}
-
 
 
 	const esp_partition_t *running = esp_ota_get_running_partition();
@@ -744,7 +738,7 @@ void app_main(void)
 		}
 	}
 
-	xTaskCreate(host_rx_task, "host_rx_task", 1024*3, NULL, 5, NULL);
+	xTaskCreate(host_rx_task, "host_rx_task", 1024*4, NULL, 5, NULL);
 	xTaskCreate(can_rx_task, "can_rx_task", 1024*3, NULL, 5, NULL);
 	xTaskCreate(nmea_rx_task, "nmea_rx_task", 1024*3, NULL, 5, NULL);
 	xTaskCreate(ping_pong_task, "ping_pong_task", 1024*1, NULL, 5, NULL);

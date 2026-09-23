@@ -17,8 +17,11 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "freertos/FreeRTOS.h"
-#include "esp_timer.h"
+#include <freertos/FreeRTOS.h>
+#include <esp_timer.h>
+#include <esp_ota_ops.h>
+#include <esp_mac.h>
+
 #include "esp_log_wican.h"
 #include "can.h"
 #include "wc_uart.h"
@@ -26,6 +29,7 @@
 #include "elm327.h"
 #include "types.h"
 #include "gps_common.h"
+#include "config_server.h"
 
 #include <ctype.h>
 
@@ -37,7 +41,7 @@ static int terminalR_led = GPIO_NUM_NC; // not connected
 
 const char *ok_str = "OK";
 const char *question_mark_str = "?";
-const char *device_description = "ELM327 v1.3a meatPi";
+const char *device_description = "ELM327v1.3a";
 const char *identify = "OBDLink MX";
 
 
@@ -1656,18 +1660,48 @@ static char* elm327_ping(const char* command_str)
 	return (char*)ok_str;
 }
 
-static void printRamUsage(char *buf)
+static void fillDeviceInformation(char* buff)
 {
+	// fills like: WiC_(fv:v3.05,hv:v1.50_usb,mf:65435,mm:24354,a:56fe6c7765e2)
+
+	int offset = 0;
+	offset += sprintf(buff + offset, "WiC_(");
+
+	const esp_partition_t* running = esp_ota_get_running_partition();
+	esp_app_desc_t running_app_info;
+	if (running && esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
+		const char* projectType = (strstr(running_app_info.project_name, "usb") != 0 ? "usb" : "obd");
+
+		offset += sprintf(buff + offset, "fv:%c%c.%c%c,",
+			running_app_info.version[0], running_app_info.version[1],
+			running_app_info.version[2], running_app_info.version[3]
+		);
+
+		offset += sprintf(buff + offset, "hv:%c%c.%c%c_%s,",
+			running_app_info.version[6], running_app_info.version[7],
+			running_app_info.version[8], running_app_info.version[9],
+			projectType
+		);
+	} else {
+		offset += sprintf(buff + offset, "fv:__,hv:__,");
+	}
+
 	multi_heap_info_t info = {0};
 	heap_caps_get_info(&info, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // internal RAM, memory capable to store data or to create new task
-	// info.total_free_bytes;   // total currently free in all non-continues blocks
+	// info.total_free_bytes;    // total currently free in all non-continues blocks
 	// info.minimum_free_bytes;  // minimum free ever
-	// info.largest_free_block;   // largest continues block to allocate big array
+	// info.largest_free_block;  // largest continues block to allocate big array
 
-	// ESP_LOGW("TAG", "total_free_bytes = %d , minimum_free_bytes = %d , largest_free_block = %d",
-	//     info.total_free_bytes, info.minimum_free_bytes, info.largest_free_block);
+	offset += sprintf(buff + offset, "mf:%d,mm:%d,", info.total_free_bytes, info.minimum_free_bytes);
 
-	sprintf(buf, "(free: %d , min_free: %d)", info.total_free_bytes, info.minimum_free_bytes);
+	uint8_t derived_mac_addr[6] = {0};
+	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	offset += sprintf(buff + offset, "a:%02x%02x%02x%02x%02x%02x",
+			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
+			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]
+	);
+
+	strcat(buff, ")");
 }
 
 
@@ -1716,7 +1750,7 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 	// call will keep add to the cmd_buffer until the ending CR is found.
 	static char cmd_buffer[KWP_COMMAND_LENGHT * 2 + 5]; // maximum KWP message (2 hex digits for each byte) + 'kwp' prefix + '\r'
 	static uint16_t cmd_buffer_len = 0;
-	char cmd_response[64];
+	char cmd_response[KWP_COMMAND_LENGHT];
 
 	if (len > 4 && memcmp(buf, "AT WS", 5) == 0) {
 		cmd_buffer_len = 0;
@@ -1746,6 +1780,18 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 			{
 				elm327_gps_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
 			}
+			else if(!strncmp(cmd_buffer, "stg", 3))
+			{
+				const size_t enc_data_len = (cmd_buffer_len - 3) / 2;
+				elm327_fill_data_from_hex_str(cmd_buffer + 3, (uint8_t*)cmd_response, enc_data_len);
+				
+				cmd_buffer[0] = 0;
+				strcat(cmd_buffer, "stg");
+				config_server_processSetting((const uint8_t*)cmd_response, enc_data_len, cmd_buffer);
+
+				strcat(cmd_buffer, "\r>");
+				elm327_response(cmd_buffer, 0, q);
+			}
 			else if(!strncmp(cmd_buffer, "at", 2))
 			{
 				for(int j = 0; elm327_commands[j].command != NULL; j++)
@@ -1757,7 +1803,7 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 						{
 							strcat(cmd_response, ret_ptr);
 							if (!strncmp(cmd_buffer+2, "ws", 2)) {
-								printRamUsage(cmd_response + strlen(cmd_response));
+								fillDeviceInformation(cmd_response + strlen(cmd_response));
 							}
 							cmd_found_flag = 1;
 							ESP_LOGI(TAG, "cmd: %s, rsp: %s", elm327_commands[j].command, cmd_response);

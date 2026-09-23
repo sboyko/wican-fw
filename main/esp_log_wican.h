@@ -1,8 +1,6 @@
 #ifndef esp_log_wican_h
 #define esp_log_wican_h
 
-#include "esp_log.h"
-
 // Note: don't forget to turn off 'configUSE_TRACE_FACILITY' option
 
 // typedef enum {
@@ -15,6 +13,13 @@
 //     ESP_LOG_MAX     = 6,    /*!< Number of levels supported */
 // } esp_log_level_t;
 #define ESP_LOG_MAIN 0
+
+
+#if ESP_LOG_MAIN == 0
+    #define CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT
+#endif // ESP_LOG_MAIN
+
+#include <esp_check.h> // implies <esp_log.h>
 
 #if ESP_LOG_MAIN == 0
     #undef ESP_LOGV

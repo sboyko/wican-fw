@@ -42,7 +42,7 @@ static EventGroupHandle_t s_mqtt_event_group = NULL;
 #define MQTT_CONNECTED_BIT 			BIT0
 #define PUB_SUCCESS_BIT     		BIT1
 static esp_mqtt_client_handle_t client = NULL;
-static char *device_id;
+static char* device_id;
 static char mqtt_sub_topic[128];
 static char mqtt_status_topic[128];
 static uint8_t conn_led = GPIO_NUM_NC; // not connected

@@ -45,8 +45,7 @@ static EventGroupHandle_t s_wifi_event_group = NULL;
 #define WIFI_INIT_BIT     		 	BIT3
 #define WIFI_CONNECT_IDLE_BIT     	BIT4
 
-char sta_ip[20] = {0};
-
+static TaskHandle_t xwifi_handle = NULL;
 static const TickType_t connect_delay[] = {1000, 1000, 1000, 1000, 1000,1000};
 
 static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
@@ -57,7 +56,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
     {
     	ESP_LOGI(TAG, "WIFI_EVENT_STA_START");
-        esp_wifi_connect();
+        esp_wifi_connect(); // Impacts STA and APSTA modes only
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
@@ -74,6 +73,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
 
+        char sta_ip[20] = {0};
         sprintf(sta_ip, "%d.%d.%d.%d", IP2STR(&event->ip_info.ip));
 
         config_server_set_sta_ip(sta_ip);
@@ -89,7 +89,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     	ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED");
         ESP_LOGI(TAG, "station "MACSTR" join, AID=%d",
                  MAC2STR(((wifi_event_ap_staconnected_t*) event_data)->mac), ((wifi_event_ap_staconnected_t*) event_data)->aid);
-        if(config_server_get_ble_config())
+        if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
         {
 			ble_disable();
 			ESP_LOGW(TAG, "disable ble");
@@ -100,7 +100,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     	ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED");
         ESP_LOGI(TAG, "station "MACSTR" leave, AID=%d",
                  MAC2STR(((wifi_event_ap_stadisconnected_t*) event_data)->mac), ((wifi_event_ap_stadisconnected_t*) event_data)->aid);
-        if(config_server_get_ble_config())
+        if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
         {
 			ble_enable();
 			ESP_LOGW(TAG, "enable ble");
@@ -112,8 +112,12 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-void wifi_network_deinit(void)
+void wifi_network_deinit()
 {
+    if ((config_server_get_wic_hsi() & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
+        return;
+    }
+
 	xEventGroupWaitBits(s_wifi_event_group,
 						WIFI_CONNECT_IDLE_BIT,
 						pdFALSE,
@@ -124,8 +128,8 @@ void wifi_network_deinit(void)
 
 	ESP_LOGW(TAG, "wifi deinit");
 
-	esp_wifi_disconnect();
-    esp_err_t err = esp_wifi_stop();
+	esp_wifi_disconnect(); // Disconnect WiFi station from the AP.
+    esp_wifi_stop(); // Stop WiFi, impact all modes (AP/STA/APSTA).
 
     esp_event_handler_unregister(IP_EVENT,
     								IP_EVENT_STA_GOT_IP,
@@ -133,14 +137,16 @@ void wifi_network_deinit(void)
     esp_event_handler_unregister(WIFI_EVENT,
 									ESP_EVENT_ANY_ID,
 									&wifi_network_event_handler);
-    if (err == ESP_ERR_WIFI_NOT_INIT)
-    {
+}
+
+void wifi_network_restart()
+{
+    const uint32_t wic_hsi = config_server_get_wic_hsi();
+    if ((wic_hsi & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
         return;
     }
-}
-void wifi_network_restart(void)
-{
-	xEventGroupSetBits(s_wifi_event_group, WIFI_INIT_BIT);
+
+    xEventGroupSetBits(s_wifi_event_group, WIFI_INIT_BIT);
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
@@ -155,17 +161,23 @@ void wifi_network_restart(void)
                                                         NULL,
                                                         &instance_got_ip));
 
-    esp_err_t err = esp_wifi_start();
-    if (err != ESP_OK)
-    {
-        return;
+    esp_err_t err = esp_wifi_start(); // Start WiFi, impact all modes (AP/STA/APSTA).
+    ESP_RETURN_VOID_ON_ERROR(err, TAG, "failed: %x", err);
+
+    if ((wic_hsi & WIC_HSI_WEB) == WIC_HSI_WEB) {
+        err = esp_wifi_connect(); // Impacts STA and APSTA modes only
+        ESP_RETURN_VOID_ON_ERROR(err, TAG, "failed: %x", err);
     }
-    esp_wifi_connect();
 
     ESP_LOGW(TAG, "WiFi restarted");
 }
-bool wifi_network_is_connected(void)
+
+bool wifi_network_is_connected()
 {
+    if ((config_server_get_wic_hsi() & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
+        return 0;
+    }
+
 	EventBits_t ux_bits;
 	if(s_wifi_event_group != NULL)
 	{
@@ -187,19 +199,27 @@ static void wifi_conn_task(void *pvParameters)
 		            portMAX_DELAY);
 		ESP_LOGI(TAG, "Trying to connect...");
 		xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECT_IDLE_BIT);
-		esp_wifi_connect();
-		xEventGroupWaitBits(s_wifi_event_group,
+
+        esp_wifi_connect(); // Impacts STA and APSTA modes only
+
+        xEventGroupWaitBits(s_wifi_event_group,
 					WIFI_CONNECT_IDLE_BIT,
 		            pdFALSE,
 		            pdTRUE,
 		            portMAX_DELAY);
+
 		vTaskDelay(pdTICKS_TO_MS(connect_delay[s_retry_num++]));
 		s_retry_num %= (sizeof(connect_delay)/sizeof(TickType_t));
 	}
 }
-static TaskHandle_t xwifi_handle = NULL;
-void wifi_network_init(char* sta_ssid, char* sta_pass)
+
+void wifi_network_init()
 {
+    const uint32_t wic_hsi = config_server_get_wic_hsi();
+    if ((wic_hsi & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
+        return;
+    }
+
 	if(s_wifi_event_group == NULL)
 	{
 		s_wifi_event_group = xEventGroupCreate();
@@ -215,17 +235,10 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
 //	xEventGroupClearBits(s_wifi_event_group, WIFI_INIT_BIT);
 
 
-    int8_t channel = config_server_get_ap_ch();
-	if(channel == -1)
-	{
-		channel = 6;
-	}
-	ESP_LOGI(TAG, "AP Channel: %d", channel);
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    if(config_server_get_ble_config())
+    if((wic_hsi & WIC_HSI_BLE) == WIC_HSI_BLE)
     {
     	ESP_ERROR_CHECK( esp_wifi_set_ps(WIFI_PS_MIN_MODEM) );
     }
@@ -247,74 +260,81 @@ void wifi_network_init(char* sta_ssid, char* sta_pass)
                                                         NULL,
                                                         &instance_got_ip));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    static wifi_config_t wifi_config_sta = {
-        .sta = {
-            .ssid = "",
-            .password = "",
-            /* Setting a password implies station will connect to all security modes including WEP/WPA.
-             * However these modes are deprecated and not advisable to be used. Incase your Access point
-             * doesn't support WPA2, these mode can be enabled by commenting below line */
-			.threshold.authmode = WIFI_AUTH_WPA2_PSK,
-			.rm_enabled = 1,
-			.btm_enabled = 1,
-			.scan_method = WIFI_ALL_CHANNEL_SCAN,
-			.sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
-			.bssid_set = false,
 
-            .pmf_cfg = {
-                .capable = true,
-                .required = false
+    if((wic_hsi & WIC_HSI_WEB) == WIC_HSI_WEB)
+    {
+        wifi_config_t wifi_config_sta = {
+            .sta = {
+                .ssid = "",
+                .password = "",
+                /* Setting a password implies station will connect to all security modes including WEP/WPA.
+                * However these modes are deprecated and not advisable to be used. Incase your Access point
+                * doesn't support WPA2, these mode can be enabled by commenting below line */
+                .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+                .rm_enabled = 1,
+                .btm_enabled = 1,
+                .scan_method = WIFI_ALL_CHANNEL_SCAN,
+                .sort_method = WIFI_CONNECT_AP_BY_SIGNAL,
+                .bssid_set = false,
+
+                .pmf_cfg = {
+                    .capable = true,
+                    .required = false
+                },
             },
-        },
-    };
-    static wifi_config_t wifi_config_ap =
-    {
-        .ap = {
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_WPA_WPA2_PSK
-        },
-    };
-    wifi_config_ap.ap.channel = channel;
+        };
 
-    if(config_server_get_wifi_mode() == APSTA_MODE)// || (sta_ssid != 0 && sta_pass != 0))
-    {
-    	if(sta_ssid == 0 && sta_pass == 0)
-    	{
-    		strcpy( (char*)wifi_config_sta.sta.ssid, (char*)config_server_get_sta_ssid());
-    		strcpy( (char*)wifi_config_sta.sta.password, (char*)config_server_get_sta_pass());
-    	}
-    	else
-    	{
-        	strcpy( (char*)wifi_config_sta.sta.ssid, (char*)sta_ssid);
-        	strcpy( (char*)wifi_config_sta.sta.password, (char*)sta_pass);
-    	}
-    	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+        const char* sta_ssid = config_server_get_wifi_sta_ssid();
+        if (strlen(sta_ssid) == 0) {
+            sta_ssid = "WiCANabitabit";
+        }
+
+        const char* sta_pass = config_server_get_wifi_sta_pass();
+        if (strlen(sta_pass) == 0) {
+            sta_pass = "airabit123";
+        }
+
+       	strcpy( (char*)wifi_config_sta.sta.ssid, sta_ssid);
+       	strcpy( (char*)wifi_config_sta.sta.password, sta_pass);
+
+        ESP_ERROR_CHECK(esp_wifi_set_mode((wic_hsi & WIC_HSI_WIFI) == WIC_HSI_WIFI ? WIFI_MODE_APSTA : WIFI_MODE_STA));
     	ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta) );
     	if(xwifi_handle == NULL)
     	{
     		xTaskCreate(wifi_conn_task, "wifi_conn_task", 1024*3, NULL, 5, &xwifi_handle);
     	}
     }
-    else
+
+    if ((wic_hsi & WIC_HSI_WIFI) == WIC_HSI_WIFI)
     {
-    	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        const int8_t channel = config_server_get_wifi_ap_ch();
+        ESP_LOGI(TAG, "AP Channel: %d", channel);
+
+        wifi_config_t wifi_config_ap = {
+            .ap = {
+                .max_connection = 4,
+                .authmode = WIFI_AUTH_WPA_WPA2_PSK
+            },
+        };
+        wifi_config_ap.ap.channel = channel;
+
+        fill_adapter_name((char *)wifi_config_ap.ap.ssid);
+        strcpy( (char*)wifi_config_ap.ap.password, config_server_get_wifi_ap_pass());
+
+    	ESP_ERROR_CHECK(esp_wifi_set_mode((wic_hsi & WIC_HSI_WEB) == WIC_HSI_WEB ? WIFI_MODE_APSTA : WIFI_MODE_AP));
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
+        ESP_ERROR_CHECK(esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20));
+
+        esp_netif_ip_info_t ipInfo;
+        ipInfo.ip.addr = ipaddr_addr(config_server_get_wifi_ap_ip()); // IP4_ADDR(&ipInfo.ip, 192,168,80,1);
+        ipInfo.gw.addr = ipaddr_addr(config_server_get_wifi_ap_ip()); // IP4_ADDR(&ipInfo.gw, 192,168,80,1);
+        ipInfo.netmask.addr = ipaddr_addr("255.255.255.0"); // IP4_ADDR(&ipInfo.netmask, 255,255,255,0);
+        esp_netif_dhcps_stop(ap_netif);
+        esp_netif_set_ip_info(ap_netif, &ipInfo);
+        esp_netif_dhcps_start(ap_netif);
     }
 
-
-    fill_adapter_name((char *)wifi_config_ap.ap.ssid);
-    strcpy( (char*)wifi_config_ap.ap.password, "239239239"/*(char*)config_server_get_ap_pass()*/);
-
-    esp_netif_ip_info_t ipInfo;
-    IP4_ADDR(&ipInfo.ip, 192,168,80,1);
-	IP4_ADDR(&ipInfo.gw, 192,168,80,1);
-	IP4_ADDR(&ipInfo.netmask, 255,255,255,0);
-	esp_netif_dhcps_stop(ap_netif);
-	esp_netif_set_ip_info(ap_netif, &ipInfo);
-	esp_netif_dhcps_start(ap_netif);
-
-	ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
-	ESP_ERROR_CHECK(esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_start()); // Start WiFi, impact all modes (AP/STA/APSTA).
     xEventGroupSetBits(s_wifi_event_group, WIFI_INIT_BIT);
     xEventGroupSetBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
     xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECT_IDLE_BIT);

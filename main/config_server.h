@@ -35,20 +35,19 @@
 #define SAVVYCAN			2
 #define OBD_ELM327			3
 
+// WiCAN HSI (Hardware/Software Interface)
+typedef enum {
+	WIC_HSI_USB = 0x01, // Always set for now
+	WIC_HSI_BLE = 0x02,
+	WIC_HSI_WIFI = 0x04, // WIFI_MODE_AP
+	WIC_HSI_WEB = 0x08,  // WIFI_MODE_STA
+} config_server_wican_iterface_t;
+
 typedef struct _device_config
 {
-	char wifi_mode[65];
-	char ap_ch[65];
-	char sta_ssid[65];
-	char sta_pass[65];
 	char can_datarate[65];
 	char can_mode[65];
-	char port_type[65];
-	char port[65];
-	char ap_pass[65];
 	char protocol[65];
-	char ble_pass[18];
-	char ble_status[32];
 	char sleep_status[32];
 	char sleep_volt[32];
 	char batt_alert[32];
@@ -71,32 +70,67 @@ typedef struct _device_config
 	char mqtt_tx_topic[64];
 	char mqtt_rx_topic[64];
 	char mqtt_status_topic[64];
-}device_config_t;
 
+	// Master (admin) password, up to 16 characters.
+	char wic_pass[18];
+
+	// Visible adapter name is 'WiC_<wic_name>.<MAC_address>' like 'WiC_MyName.562e5fd68549'
+	// So maximum length of 'wic_name' is:  32 (Wifi SSID / BLE Device Name) - 4('WiC_') - 6*2(MAC) - 1('.') - 1('\0') = 14
+	char wic_name[16];
+
+	// Unsigned integer value (stored as hex string) which corresponds to 'config_server_wican_iterface_t' enumeration.
+	// Note: for now WIC_HSI_USB is always set.
+	char wic_hsi[10];
+
+	// BLE pairing passwords (passkeys or PIN codes) must be exactly 6 numeric digits (000000 to 999999).
+	char ble_pass[8];
+
+	// WiFi password of soft-AP (for modern WPA2 and WPA3 networks must be between 8 and 63 characters).
+	char ap_pass[65];
+
+	// Channel of soft-AP (1..13, 0 - let the driver choose automatically)
+	char ap_ch[3];
+
+	// Protocol ('tcp' / 'udp') of soft-AP 
+	char ap_proto[5];
+
+	// IP address of soft-AP protocol (like '192.168.80.1')
+	char ap_ip[18];
+
+	// Port of soft-AP protocol (0..65535)
+	char ap_port[7];
+
+	// SSID of target-AP (1..32 characters)
+	// Empty value means Abit-specific SSID name is used.
+	char sta_ssid[34];
+
+	// Password of target-AP (8..63 characters)
+	// Empty value means Abit-specific SSID password is used.
+	char sta_pass[65];
+
+	// URL of WebSocket server (up to 230 bytes, like 'ws://212.24.43.2:80' or 'wss://akm02.abit.spb.ru').
+	char ws_addr[232];
+
+	// UART USB baudrate
+	char uart_baud[10];
+
+} device_config_t;
+
+typedef struct QueueDefinition *QueueHandle_t;
 
 void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, char * did);
+void config_server_restart(void);
 void config_server_stop(void);
-int8_t config_server_get_wifi_mode(void);
-int8_t config_server_get_ap_ch(void);
-char *config_server_get_sta_ssid(void);
-char *config_server_get_sta_pass(void);
+
 int8_t config_server_get_can_rate(void);
 int8_t config_server_get_can_mode(void);
-int8_t config_server_get_port_type(void);
-int32_t config_server_get_port(void);
 void config_server_wifi_connected(bool flag);
 //bool config_server_get_wifi_connected(void);
 void config_server_set_sta_ip(char* ip);
 void config_server_get_sta_ip(char* ip);
-char *config_server_get_ap_pass(void);
 int8_t config_server_protocol(void);
-int config_server_ble_pass(void);
 int8_t config_server_get_sleep_config(void);
-//void config_server_set_ble_tempfn(char b);
-//char config_server_get_ble_tempfn(void);
-int8_t config_server_get_ble_config(void);
 void config_server_set_ble_config(uint8_t b);
-void config_server_restart(void);
 bool config_server_ws_connected(void);
 bool config_server_get_sleep_volt(float *sleep_volt);
 int8_t config_server_get_battery_alert_config(void);
@@ -120,3 +154,47 @@ int8_t config_server_mqtt_elm327_log(void);
 char *config_server_get_mqtt_tx_topic(void);
 char *config_server_get_mqtt_rx_topic(void);
 char *config_server_get_mqtt_status_topic(void);
+
+// Master password (6..16 characters)
+const char *config_server_get_wic_pass();
+
+// Name of WiCAN adapter (0..14 characters)
+const char *config_server_get_wic_name();
+
+// Bit-field of used HSI (config_server_wican_iterface_t)
+uint32_t config_server_get_wic_hsi();
+
+// BLE standard specifies a 6-digit passkey (0-9) for standard pairing, i.e BLE relies on a strict 6-digit number.
+uint32_t config_server_get_ble_pass();
+
+// Пароль для режима точки доступа (Access Point или soft-AP), в котором ESP32 сам создает собственную Wi-Fi сеть,
+// к которой могут подключаться другие устройства.
+// В этом режиме устройство само назначает IP-адреса подключающимся клиентам (работает встроенный DHCP-сервер).
+// Чип транслирует SSID (имя сети, задаётся в fill_adapter_name()) и этот пароль.
+const char *config_server_get_wifi_ap_pass();
+
+// Channel of soft-AP (integer in between 1..13)
+int8_t config_server_get_wifi_ap_ch();
+
+// Protocol (TCP_PORT / UDP_PORT) of soft-AP 
+int8_t config_server_get_wifi_ap_proto();
+
+// IP address of soft-AP protocol
+const char *config_server_get_wifi_ap_ip();
+
+// Port of soft-AP protocol (0..65535)
+uint16_t config_server_get_wifi_ap_port();
+
+// SSID of target-AP (1..32 characters or empty)
+char *config_server_get_wifi_sta_ssid();
+
+// Password of target-AP (8..63 characters or empty)
+char *config_server_get_wifi_sta_pass();
+
+// URL of WebSocket server (up to 230 bytes)
+char *config_server_get_ws_addr();
+
+// UART USB baudrate
+uint32_t config_server_get_uart_baudrate();
+
+void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, char* const response);
