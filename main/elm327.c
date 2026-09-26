@@ -36,7 +36,7 @@
 #define TAG  __func__
 
 static QueueHandle_t can_rx_queue;
-static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL;
+static QueueHandle_t *kline_tx_queue = NULL, *kline_rx_queue = NULL;
 static int terminalR_led = GPIO_NUM_NC; // not connected
 
 const char *ok_str = "OK";
@@ -1216,10 +1216,10 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 	elm327_fill_data_from_hex_str(cmd, (uint8_t *) rsp, kwp_bytes_count);
 
 	// clear incoming queue
-	xQueueReset(*xuart_rx_queue);
+	xQueueReset(*kline_rx_queue);
 
 	// send KWP message
-	if (!elm327_response(rsp, kwp_bytes_count, xuart_tx_queue)) {
+	if (!elm327_response(rsp, kwp_bytes_count, kline_tx_queue)) {
 		elm327_response("kwp_send_fails_ CAN ERROR\r>", 0, q);
 		close_skip_mode();
 		notify_send_status(false);
@@ -1246,7 +1246,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 	while (true) {
 		const int64_t txtime_local = esp_timer_get_time();
 
-		if (xQueueReceive(*xuart_rx_queue, &xsend_buffer, 5)) {
+		if (xQueueReceive(*kline_rx_queue, &xsend_buffer, 5)) {
 			totalMs += elapsedTimeMs(txtime_local);
 
 			const int data_offset = echo_length;
@@ -1380,11 +1380,6 @@ static void elm327_kline_request(const char *cmd, const size_t cmd_len, QueueHan
 		return;
 	}
 
-	if (xuart_tx_queue == q) { // protection against simulteneous use of USB and KLine
-		elm327_response("kwp_simulteneous_use_of_USB_and_KLine_ CAN ERROR\r>", 0, q);
-		return;
-	}
-
 	wc_kline_update(true);
 
 	if (!strncmp(cmd, "baud", 4)) {
@@ -1427,10 +1422,10 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 	elm327_fill_data_from_hex_str(cmd, (uint8_t *) rsp, kwp_bytes_count);
 
 	// clear incoming queue
-	xQueueReset(*xuart_rx_queue);
+	xQueueReset(*kline_rx_queue);
 
 	// send KWP message
-	if (!elm327_response(rsp, kwp_bytes_count, xuart_tx_queue)) {
+	if (!elm327_response(rsp, kwp_bytes_count, kline_tx_queue)) {
 		elm327_response("com_send_fails_ CAN ERROR\r>", 0, q);
 		notify_send_status(false);
 		return;
@@ -1457,7 +1452,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 			return; // reset by incoming data
 		}
 
-		if (xQueueReceive(*xuart_rx_queue, &xsend_buffer, pdMS_TO_TICKS(timeoutMs))) {
+		if (xQueueReceive(*kline_rx_queue, &xsend_buffer, pdMS_TO_TICKS(timeoutMs))) {
 			const int data_offset = echo_length;
 			if (echo_length > 0) { // check echo bytes
 				const int echo_offset = (kwp_bytes_count - echo_length);
@@ -1490,7 +1485,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 	}
 
 	if (expectedReplySize < 0) { // read all remaining bytes
-		while (xQueueReceive(*xuart_rx_queue, &xsend_buffer, 5)) {
+		while (xQueueReceive(*kline_rx_queue, &xsend_buffer, 5)) {
 			for (int i = 0; i < xsend_buffer.usLen; ++i) {
 				offset += sprintf(rsp + offset, "%02X", xsend_buffer.ucElement[i]);
 			}
@@ -1503,11 +1498,6 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 
 static void elm327_comm_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
 {
-	if (xuart_tx_queue == q) { // protection against simulteneous use of USB and KLine
-		elm327_response("com_simulteneous_use_of_USB_and_KLine_ CAN ERROR\r>", 0, q);
-		return;
-	}
-
 	wc_kline_update(true);
 
 	elm327_comm_send(cmd, cmd_len, q, fnHasNewData);
@@ -1520,10 +1510,6 @@ static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandl
 		vTaskDelay(pdMS_TO_TICKS(20));
 		
 		wc_gps_update(false); // switch to USB (if not K-Line of course)
-		return;
-	}
-
-	if (xuart_tx_queue == q) { // protection against simulteneous use of USB and GPS
 		return;
 	}
 
@@ -1948,8 +1934,8 @@ void elm327_init(bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q), 
 	terminalR_led = terminal_resistor_led;
 }
 
-void elm327_uart_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue)
+void elm327_kline_init(QueueHandle_t* kline_tx_q, QueueHandle_t* kline_rx_q)
 {
-    xuart_tx_queue = tx_queue;
-	xuart_rx_queue = rx_queue;
+	kline_tx_queue = kline_tx_q;
+	kline_rx_queue = kline_rx_q;
 }

@@ -114,6 +114,12 @@ typedef struct _device_config
 	// UART USB baudrate
 	char uart_baud[10];
 
+	// GPS COM setting (format 'baud_parity_dataBits_stopBits' , i.e. '9600_0_8_0')
+	char gps_sett[15];
+
+	// GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
+	char gps_init[232];
+
 } device_config_t;
 
 typedef struct QueueDefinition *QueueHandle_t;
@@ -186,15 +192,21 @@ const char *config_server_get_wifi_ap_ip();
 uint16_t config_server_get_wifi_ap_port();
 
 // SSID of target-AP (1..32 characters or empty)
-char *config_server_get_wifi_sta_ssid();
+const char *config_server_get_wifi_sta_ssid();
 
 // Password of target-AP (8..63 characters or empty)
-char *config_server_get_wifi_sta_pass();
+const char *config_server_get_wifi_sta_pass();
 
 // URL of WebSocket server (up to 230 bytes)
-char *config_server_get_ws_addr();
+const char *config_server_get_ws_addr();
 
 // UART USB baudrate
-uint32_t config_server_get_uart_baudrate();
+uint32_t config_server_get_uart_baud();
+
+// GPS COM setting (format 'baud_parity_dataBits_stopBits')
+const char* config_server_get_gps_sett();
+
+// GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
+const char* config_server_get_gps_init();
 
 void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, char* const response);

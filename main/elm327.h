@@ -40,6 +40,6 @@ int elm327_print_canid(char *buff, twai_message_t *frame);
 
 int elm327_rx_queue_size(QueueHandle_t *rx_queue);
 
-void elm327_uart_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue);
+void elm327_kline_init(QueueHandle_t* kline_tx_q, QueueHandle_t* kline_rx_q);
 
 #endif

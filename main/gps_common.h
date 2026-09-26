@@ -8,7 +8,7 @@ typedef struct QueueDefinition *QueueHandle_t;
 
 
 // Инициализация работы с UART.
-void gps_serial_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue);
+void gps_serial_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue, const int gps_power_gpio);
 
 // Очистка буфера UART.
 void gps_serial_flush();

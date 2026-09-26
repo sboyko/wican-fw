@@ -1,6 +1,5 @@
 {
     "idf.adapterTargetName": "esp32c3",
-    "idf.portWin": "COM3",
     "idf.flashType": "UART",
     "files.associations": {
         "ftp.h": "c",
@@ -18,5 +17,6 @@
         "*.inc": "c"
     },
     "idf.pythonInstallPath": "C:/python_3.11.2/python.exe",
-    "idf.currentSetup": "C:/Users/STK/esp/esp-idf-v5.5.4/"
+    "idf.currentSetup": "C:/Users/STK/esp/esp-idf-v5.5.4/",
+    "idf.port": "COM3"
 }

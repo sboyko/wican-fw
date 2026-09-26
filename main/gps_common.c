@@ -1,9 +1,10 @@
 #include "gps_common.h"
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "esp_log_wican.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <driver/gpio.h>
 
+#include "esp_log_wican.h"
 #include "types.h"
 
 #define TAG  __func__
@@ -20,11 +21,14 @@ static int serial_buffer_pos = 0;
 static EventGroupHandle_t s_gps_event_group = NULL;
 static const int GPS_ENABLED_BIT = BIT0;
 
+static int en_vgps_gpio = GPIO_NUM_NC; // not connected
+
 // Инициализация работы с UART.
-void gps_serial_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue)
+void gps_serial_init(QueueHandle_t *tx_queue, QueueHandle_t *rx_queue, const int gps_power_gpio)
 {
 	uart_tx_queue = tx_queue;
 	uart_rx_queue = rx_queue;
+	en_vgps_gpio = gps_power_gpio;
 
 	if (s_gps_event_group == NULL) {
 		s_gps_event_group = xEventGroupCreate();
@@ -114,7 +118,7 @@ void gps_wait_enabled(const uint32_t xTicksToWait)
 		xEventGroupWaitBits(s_gps_event_group, GPS_ENABLED_BIT,
 			pdFALSE, pdFALSE, xTicksToWait); // portMAX_DELAY
 	} else {
-		vTaskDelay(xTicksToWait);
+		vTaskDelay(pdMS_TO_TICKS(50));
 	}
 }
 
@@ -122,6 +126,10 @@ static bool isDebugUnknowSentences = false;
 
 void gps_set_enabled(const bool isEnabledNotDisabled, const bool isDebug)
 {
+	if (en_vgps_gpio != GPIO_NUM_NC) {
+		gpio_set_level(en_vgps_gpio, isEnabledNotDisabled ? 1 : 0);
+	}
+
 	if (s_gps_event_group != NULL) {
 		if (isEnabledNotDisabled) {
 			xEventGroupSetBits(s_gps_event_group, GPS_ENABLED_BIT);

@@ -10,6 +10,7 @@
 #include "gps_common.h"
 #include "gps_nmea.h"
 #include "types.h"
+#include "config_server.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -222,6 +223,7 @@ void gps_nmea_read_sentence(
 			nmeaSentence[i] = '\0';
 		}
 	}
+
 	QueueHandle_t* q = tx_queue();
 	if (q) {
 		const bool processed = process_nmea_sentence(nmeaSentence, sentencePos, q);
@@ -257,6 +259,7 @@ bool gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, Q
 		return false;
 	}
 
+	// NMEA RMC 
 	if (toupper(data[2]) == 'R' && toupper(data[3]) == 'M' && toupper(data[4]) == 'C') {
 		Nmea_RMC msgData;
 		if (_process_nmea_RMC(data + 6, dataLength - 6, &msgData)) {
@@ -274,6 +277,21 @@ bool gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, Q
 			return true;
 		}
 	}
+
+	// PMTK commands (Packet MediaTek)
+	//
+	// PMTK011,MTKGPS
+	// Информационное сообщение о статусе (System Text / Boot up). Оно указывает на то, что GPS-модуль только что запустился или перезагрузился.
+	//  011: Идентификатор сообщения (текстовый статус системы).
+	//  MTKGPS: Текстовый идентификатор (система MediaTek GPS готова к работе)
+	if (toupper(data[0]) == 'P' && toupper(data[1]) == 'M' && toupper(data[2]) == 'T' && toupper(data[3]) == 'K') {
+		if (dataLength >= 14 && memcmp(data + 8, "MTKGPS", 6) == 0) {
+			gps_nmea_debug_process_sentence(data, dataLength, q);
+			gps_nmea_send_commands(config_server_get_gps_init(), q);
+			return true;
+		}
+	}
+
 	return false;
 }
 

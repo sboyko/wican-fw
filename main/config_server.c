@@ -102,6 +102,8 @@ const char device_config_default[] = "{\
 \"sta_pass\":\"\",\
 \"ws_addr\":\"ws://212.24.43.2:80\",\
 \"uart_baud\":\"2400000\",\
+\"gps_sett\":\"9600_0_8_0\",\
+\"gps_init\":\"$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r\",\
 \"the_end\":\"\"\
 }";
 static device_config_t device_config;
@@ -518,6 +520,8 @@ static esp_err_t check_status_handler(httpd_req_t *req)
 	//cJSON_AddStringToObject(root, "sta_pass", device_config.sta_pass);
 	cJSON_AddStringToObject(root, "ws_addr", device_config.ws_addr);
 	cJSON_AddStringToObject(root, "uart_baud", device_config.uart_baud);
+	cJSON_AddStringToObject(root, "gps_sett", device_config.gps_sett);
+	cJSON_AddStringToObject(root, "gps_init", device_config.gps_init);
 
     const char *resp_str = cJSON_Print(root);
 	httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
@@ -1308,6 +1312,22 @@ static void config_server_load_cfg(char *cfg)
 	}
 	strcpy(device_config.uart_baud, key->valuestring);
 	ESP_LOGI(TAG, "device_config.uart_baud: %s", device_config.uart_baud);
+
+	//*****
+	key = cJSON_GetObjectItem(root, "gps_sett");
+	if(key == 0 || strlen(key->valuestring) < 2 || strlen(key->valuestring) >= sizeof(device_config.gps_sett)) {
+		goto config_error;
+	}
+	strcpy(device_config.gps_sett, key->valuestring);
+	ESP_LOGI(TAG, "device_config.gps_sett: %s", device_config.gps_sett);
+
+	//*****
+	key = cJSON_GetObjectItem(root, "gps_init");
+	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.gps_init)) {
+		goto config_error;
+	}
+	strcpy(device_config.gps_init, key->valuestring);
+	ESP_LOGI(TAG, "device_config.gps_init: %s", device_config.gps_init);
 
 
 	//*****
@@ -2339,7 +2359,7 @@ uint16_t config_server_get_wifi_ap_port()
 /*
 * API
 */
-char *config_server_get_wifi_sta_ssid()
+const char *config_server_get_wifi_sta_ssid()
 {
 	return device_config.sta_ssid;
 }
@@ -2347,7 +2367,7 @@ char *config_server_get_wifi_sta_ssid()
 /*
 * API
 */
-char *config_server_get_wifi_sta_pass()
+const char *config_server_get_wifi_sta_pass()
 {
 	return device_config.sta_pass;
 }
@@ -2355,7 +2375,7 @@ char *config_server_get_wifi_sta_pass()
 /*
 * API
 */
-char *config_server_get_ws_addr()
+const char *config_server_get_ws_addr()
 {
 	return device_config.ws_addr;
 }
@@ -2363,9 +2383,25 @@ char *config_server_get_ws_addr()
 /*
 * API
 */
-uint32_t config_server_get_uart_baudrate()
+uint32_t config_server_get_uart_baud()
 {
 	return strtoul(device_config.uart_baud, NULL, 10);
+}
+
+/*
+* API
+*/
+const char *config_server_get_gps_sett()
+{
+	return device_config.gps_sett;
+}
+
+/*
+* API
+*/
+const char *config_server_get_gps_init()
+{
+	return device_config.gps_init;
 }
 
 /*

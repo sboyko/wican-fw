@@ -50,15 +50,16 @@
 
 #define TAG  __func__
 
-#define PWR_LED_GPIO_NUM            7  // blue (HL1 (USB/W) - 0: off / 1: on)
-#define CAN_TR_LED_GPIO_NUM         8  // green (HL5 (CAN TR) - 0: on / 1: off)
-#define CAN_RX_LED_GPIO_NUM         9  // yellow (HL6 (CAN RX) - 0: on / 1: off)
-#define KLINE_GPS_LED_GPIO_NUM      10 // (HL2 (K-Line) / HL3 (GPS) - 0: KLine / 1: GPS)
+#define PWR_LED_GPIO_NUM       7  // blue (HL1 (USB/W) - 0: off / 1: on)
+#define CAN_TR_LED_GPIO_NUM    8  // green (HL5 (CAN TR) - 0: on / 1: off)
+#define CAN_RX_LED_GPIO_NUM    9  // yellow (HL6 (CAN RX) - 0: on / 1: off)
+#define GPS_POWER_GPIO_NUM     10 // (Выход/EN_VGPS)  Установка '1' включает источник питания +3,3В приемника GPS. Установка '0' выключает источник (состояние по-умолчанию).
 
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CAN_TR_LED_GPIO_NUM) | (1ULL<<CAN_RX_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<KLINE_GPS_LED_GPIO_NUM))
 
-static QueueHandle_t xMsg_Tx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue;
-static QueueHandle_t xMsg_Rx_Queue, xmsg_mqtt_rx_queue, xmsg_uart_rx_queue;
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CAN_TR_LED_GPIO_NUM) | (1ULL<<CAN_RX_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<GPS_POWER_GPIO_NUM))
+
+static QueueHandle_t xMsg_Tx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_kline_tx_queue;
+static QueueHandle_t xMsg_Rx_Queue, xmsg_mqtt_rx_queue, xmsg_kline_rx_queue;
 
 static QueueHandle_t* host_txQueue = NULL;
 static int64_t host_tx_last_time = 0; // last time we successfully scheduled send message to host
@@ -416,15 +417,22 @@ $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
 	// commands (GPS модуль GT-502GG):
 	// $PMTK220,1000 - Position Fix Interval (Packet Type: 220 PMTK_SET_POS_FIX)
 	// $PMTK314,1,1,1,1,1,5,0,0,0,0,0,0,0,0,0,0,0,1,0 -  totally 19 data fields that present output frequencies for the 19 supported NMEA sentences individually (Packet Type: 314 PMTK_API_SET_NMEA_OUTPUT)
+	/*
 	char gps_init_commands[] = "\
 $PMTK220,1000\r\
 $PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
 ";
+	*/
 
-	const int gps_uart_baudRate = 9600;
-	const int gps_uart_parity = 0;
-	const int gps_uart_dataBits = 8;
-	const int gps_uart_stopBits = 0;
+	int gps_baud = 9600;
+	int gps_parity = 0;
+	int gps_dataBits = 8;
+	int gps_stopBits = 0;
+
+	// load GPS COM settings (i.e. '9600_0_8_0')
+	if (sscanf(config_server_get_gps_sett(), "%d %d %d %d", &gps_baud, &gps_parity, &gps_dataBits, &gps_stopBits) != 4) {
+		ESP_LOGE(TAG, "Unexpected fields count in: %s", config_server_get_gps_sett());
+	}
 
 	xdev_buffer waste_buffer;
 
@@ -434,24 +442,23 @@ $PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
 		gps_wait_enabled(portMAX_DELAY);
 
 		QueueHandle_t* const txQueue = getHostTxQueue();
-		if (txQueue == NULL) { // no activity on WiCAN
+		if (txQueue == NULL // no activity on WiCAN
+			|| txQueue == &xmsg_uart_tx_queue // protects against simulteneous use of USB and GPS
+			) {
 			gps_set_enabled(false, false); // pause 'nmea_rx_task'
 			wc_gps_update(false); // switch to USB (if not K-Line of course)
 			continue;
 		}
 
-		if (txQueue == &xmsg_uart_tx_queue // protects against simulteneous use of USB and GPS
-				|| wc_kline_active() // don't mess with K-Line
-				|| elm327_process_idle_cmd(&waste_buffer) // detects that 'bulk' mode in on
-				) {
+		if (elm327_process_idle_cmd(&waste_buffer)) { // be silent when 'bulk' mode in on
 			continue;
 		}
 
 		if (!wc_gps_active()) {
-			if (!wc_gps_set_baudrate(gps_uart_baudRate, gps_uart_parity, gps_uart_dataBits, gps_uart_stopBits)) {
+			if (!wc_gps_set_baudrate(gps_baud, gps_parity, gps_dataBits, gps_stopBits)) {
 				continue;
 			}
-			gps_nmea_send_commands(gps_init_commands, txQueue);
+			gps_nmea_send_commands(config_server_get_gps_init(), txQueue);
 		}
 
 		wc_gps_update(true);
@@ -579,7 +586,7 @@ void app_main(void)
 	gpio_set_level(PWR_LED_GPIO_NUM, 1); // WiCAN connected 'on'
 	gpio_set_level(CAN_TR_LED_GPIO_NUM, 1); // CAN TR 'off'
 	gpio_set_level(CAN_RX_LED_GPIO_NUM, 1); // CAN RX 'off'
-	gpio_set_level(KLINE_GPS_LED_GPIO_NUM, 1); // GPS led 'on'
+	gpio_set_level(GPS_POWER_GPIO_NUM, 0); // GPS power 'off'
 
 	xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) ); // common RX queue
 	xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) ); // TCP TX queue
@@ -718,11 +725,12 @@ void app_main(void)
 			project_hardware_rev = WICAN_USB_V100;
 			ESP_LOGI(TAG, "project_hardware_rev: USB");
 
-			xmsg_uart_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) ); // USB / K-Line TX queue
-			xmsg_uart_rx_queue = xQueueCreate(16, sizeof( xdev_buffer) ); // K-Line RX queue
-	   		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_uart_rx_queue, KLINE_GPS_LED_GPIO_NUM);
+			xmsg_uart_tx_queue = xQueueCreate(32, sizeof( xdev_buffer) ); // USB / GPS TX queue
+			xmsg_kline_tx_queue = xQueueCreate(8, sizeof( xdev_buffer) ); // K-Line TX queue
+			xmsg_kline_rx_queue = xQueueCreate(8, sizeof( xdev_buffer) ); // K-Line RX queue
+	   		wc_uart_init(&xmsg_uart_tx_queue, &xMsg_Rx_Queue, &xmsg_kline_tx_queue, &xmsg_kline_rx_queue, GPS_POWER_GPIO_NUM);
 			
-			elm327_uart_init(&xmsg_uart_tx_queue, &xmsg_uart_rx_queue);
+			elm327_kline_init(&xmsg_kline_tx_queue, &xmsg_kline_rx_queue);
 		}
 		else
 		{
