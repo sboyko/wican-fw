@@ -53,10 +53,13 @@
 #define PWR_LED_GPIO_NUM       7  // blue (HL1 (USB/W) - 0: off / 1: on)
 #define CAN_TR_LED_GPIO_NUM    8  // green (HL5 (CAN TR) - 0: on / 1: off)
 #define CAN_RX_LED_GPIO_NUM    9  // yellow (HL6 (CAN RX) - 0: on / 1: off)
-#define GPS_POWER_GPIO_NUM     10 // (Выход/EN_VGPS)  Установка '1' включает источник питания +3,3В приемника GPS. Установка '0' выключает источник (состояние по-умолчанию).
+
+#define GPS_POWER_GPIO_NUM     10 // (Выход/EN_VGPS)  Установка '1' включает питание приемника GPS (~ +3,3В). Установка '0' выключает питание GPS (состояние по-умолчанию).
+#define PRGEN_GPIO_NUM         2  // (Выход/nPRG_EN)  Установка '0' включает сигнал программирования PRG (~ +5В). Установка '1' выключает сигнал PRG (состояние по-умолчанию).
 
 
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CAN_TR_LED_GPIO_NUM) | (1ULL<<CAN_RX_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<GPS_POWER_GPIO_NUM))
+
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CAN_TR_LED_GPIO_NUM) | (1ULL<<CAN_RX_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<GPS_POWER_GPIO_NUM) | (1ULL<<PRGEN_GPIO_NUM))
 
 static QueueHandle_t xMsg_Tx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_kline_tx_queue;
 static QueueHandle_t xMsg_Rx_Queue, xmsg_mqtt_rx_queue, xmsg_kline_rx_queue;
@@ -245,6 +248,7 @@ static void host_rx_task(void *pvParameters)
 			if (!hasHostTxConnection()) { // no 'ping' for over 3s*2 (looks like AKM was terminated)
 				if (getHostTxQueue()) {
 					setHostTxQueue(NULL);
+					gpio_set_level(PRGEN_GPIO_NUM, 1); // PRGEN 'off'
 					// esp_restart();
 				} else {
 					if ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
@@ -499,6 +503,7 @@ void notify_send_status(const bool sent)
 void notify_connection_closed(const dev_channel_t channel)
 {
 	setHostTxQueue(NULL);
+	gpio_set_level(PRGEN_GPIO_NUM, 1); // PRGEN 'off'
 }
 
 // API (declared in types.h)
@@ -587,6 +592,7 @@ void app_main(void)
 	gpio_set_level(CAN_TR_LED_GPIO_NUM, 1); // CAN TR 'off'
 	gpio_set_level(CAN_RX_LED_GPIO_NUM, 1); // CAN RX 'off'
 	gpio_set_level(GPS_POWER_GPIO_NUM, 0); // GPS power 'off'
+	gpio_set_level(PRGEN_GPIO_NUM, 1); // PRGEN 'off'
 
 	xMsg_Rx_Queue = xQueueCreate(WICAN_RX_QUEUE_SIZE, sizeof( xdev_buffer) ); // common RX queue
 	xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) ); // TCP TX queue
@@ -666,11 +672,11 @@ void app_main(void)
 		if(config_server_mqtt_en_config() && config_server_mqtt_elm327_log())
 		{
 			mqtt_elm327_log_en = config_server_mqtt_elm327_log();
-			elm327_init(&host_tx_task, log_can_to_mqtt, CAN_TR_LED_GPIO_NUM);
+			elm327_init(&host_tx_task, log_can_to_mqtt, CAN_TR_LED_GPIO_NUM, PRGEN_GPIO_NUM);
 		}
 		else
 		{
-			elm327_init(&host_tx_task, elm327_log_can, CAN_TR_LED_GPIO_NUM);
+			elm327_init(&host_tx_task, elm327_log_can, CAN_TR_LED_GPIO_NUM, PRGEN_GPIO_NUM);
 		}
 
 		gps_nmea_init(&host_tx_task);

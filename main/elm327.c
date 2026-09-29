@@ -37,7 +37,8 @@
 
 static QueueHandle_t can_rx_queue;
 static QueueHandle_t *kline_tx_queue = NULL, *kline_rx_queue = NULL;
-static int terminalR_led = GPIO_NUM_NC; // not connected
+static int can_terminalR_gpio = GPIO_NUM_NC; // not connected
+static int obd_prgen_gpio = GPIO_NUM_NC; // not connected
 
 const char *ok_str = "OK";
 const char *question_mark_str = "?";
@@ -714,7 +715,9 @@ static char* elm327_set_protocol(const char* command_str)
 	vTaskDelay(pdMS_TO_TICKS(15));
 
 	can_set_bitrate(elm327_config.bitrate_index);
-	gpio_set_level(terminalR_led, elm327_config.terminal_resistor ? 0 : 1);
+	if (can_terminalR_gpio != GPIO_NUM_NC) {
+		gpio_set_level(can_terminalR_gpio, elm327_config.terminal_resistor ? 0 : 1);
+	}
 
 	static twai_filter_config_t allPassFilter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 	can_set_filter(allPassFilter.acceptance_code);
@@ -1434,6 +1437,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 	}
 
 	if (expectedReplySize == 0) {
+		elm327_response("OK\r>", 0, q);
 		return;
 	}
 
@@ -1646,6 +1650,18 @@ static char* elm327_ping(const char* command_str)
 	return (char*)ok_str;
 }
 
+static char* elm327_set_prgen(const char* command_str)
+{
+	const int mode = elm327_parse_hex_str(command_str + 5, strlen(command_str + 5)); // considers length of 'prgen'
+
+	if (obd_prgen_gpio != GPIO_NUM_NC) {
+		gpio_set_level(obd_prgen_gpio, mode == 1 ? 0 : 1); // inverted logic due to GPIO 'Push-Pull Output' mode
+		return (char*)ok_str;
+	}
+	
+	return "prgen_disabled_ CAN ERROR";
+}
+
 static void fillDeviceInformation(char* buff)
 {
 	// fills like: WiC_(fv:v3.05,hv:v1.50_usb,mf:65435,mm:24354,a:56fe6c7765e2)
@@ -1698,6 +1714,7 @@ const xelm327_cmd_t elm327_commands[] = {
 											{"rsps", elm327_uds_response_skip},//setup UDS response filtering (Abit specific - should be the first in the list)
 											{"rspa", elm327_uds_response_all},//reset UDS response filtering (Abit specific - should be the first in the list)
 											{"ping", elm327_ping},//client sends ping to tell that it's still on the line (Abit specific - should be the first in the list)
+											{"prgen", elm327_set_prgen},//PRGEN ('on'/'off') for ECU programming (DTR pin on COM)
 
 											{"fcsd", elm327_set_fc_data},// set the flow control data
 											{"fcsh", elm327_set_fc_header},// set the flow control header
@@ -1925,13 +1942,19 @@ int elm327_print_canid(char *buff, twai_message_t *frame)
 	}
 }
 
-void elm327_init(bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q), void (*can_log)(twai_message_t* frame, uint8_t type), int terminal_resistor_led)
+void elm327_init(
+	bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q),
+	void (*can_log)(twai_message_t* frame, uint8_t type),
+	const int can_tres_gpio,
+	const int prgen_gpio)
 {
 	elm327_set_default_config(true);
+
 	elm327_response = send_to_host;
 	elm327_can_log = can_log;
 	can_rx_queue = xQueueCreate(RX_QUEUE_LENGTH * 4, sizeof(twai_message_t));
-	terminalR_led = terminal_resistor_led;
+	can_terminalR_gpio = can_tres_gpio;
+	obd_prgen_gpio = prgen_gpio;
 }
 
 void elm327_kline_init(QueueHandle_t* kline_tx_q, QueueHandle_t* kline_rx_q)
