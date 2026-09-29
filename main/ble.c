@@ -140,7 +140,6 @@ static esp_ble_adv_data_t heart_rate_scan_rsp_config = {
     .p_manufacturer_data = manufacturer,
 };
 
-static int conn_led = GPIO_NUM_NC; // not connected
 static EventGroupHandle_t s_ble_event_group = NULL;
 #define BLE_CONNECTED_BIT 			BIT0
 #define BLE_CONGEST_BIT				BIT1
@@ -673,7 +672,6 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
     	    spp_gatts_if = gatts_if;
     	    //is_connected = true;
     	    xEventGroupSetBits(s_ble_event_group, BLE_CONNECTED_BIT);
-    	    gpio_set_level(conn_led, 0);
             /* start security connect with peer device when receive the connect event sent by the master */
             esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
             break;
@@ -686,7 +684,6 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 			clear_perm_commands(true);
             //is_connected = false;
 			xEventGroupClearBits(s_ble_event_group, BLE_CONNECTED_BIT);
-            gpio_set_level(conn_led, 1);
 			notify_connection_closed(DEV_BLE);
 
 			wifi_network_restart();
@@ -899,15 +896,14 @@ bool ble_connected(void)
 	else return 0;
 }
 
-void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, uint32_t passkey, char* uid)
+void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint32_t passkey, char* uid)
 {
 	static uint32_t ble_pass_key = 0;
 	esp_err_t ret;
 
-	if(conn_led == GPIO_NUM_NC && dev_name[0] == 0)
+	if(dev_name[0] == 0)
 	{
 		strcpy((char*)dev_name, uid);
-		conn_led = connected_led;
 		ble_pass_key = passkey;
 		ESP_LOGW(TAG, "ble passkey: %lu", ble_pass_key);
 	}
@@ -1028,7 +1024,7 @@ void ble_disable(void)
 }
 void ble_enable(void)
 {
-	ble_init(0,0,0,0,0);
+	ble_init(0,0,0,0);
 //	esp_bluedroid_enable();
 }
 

@@ -56,8 +56,6 @@ static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static esp_websocket_client_handle_t ws_client = NULL;
 static bool ws_authenticated = false;
 
-static int conn_led = GPIO_NUM_NC; // not connected
-
 httpd_handle_t server = NULL;
 char* device_config_file = NULL;
 static char* mqtt_canflt_file = NULL;
@@ -101,10 +99,10 @@ const char device_config_default[] = "{\
 \"sta_ssid\":\"\",\
 \"sta_pass\":\"\",\
 \"ws_addr\":\"ws://212.24.43.2:80\",\
-\"uart_baud\":\"2400000\",\
+\"uart_baud\":\"460800\",\
 \"gps_sett\":\"9600_0_8_0\",\
 \"gps_init\":\"$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r\",\
-\"the_end\":\"\"\
+\"the_end\":\"1\"\
 }";
 static device_config_t device_config;
 TimerHandle_t xrestartTimer;
@@ -586,7 +584,6 @@ static esp_err_t ws_handler(httpd_req_t *req)
         rsp_arg.fd = httpd_req_to_sockfd(req);
 //        tcp_server_suspend();
 //        vTaskResume(ws_tx_task_handle);
-        gpio_set_level(conn_led, 0);
         xEventGroupSetBits( xServerEventGroup, WS_HANDLER_CONNECTED_BIT );
         return ESP_OK;
     }
@@ -1329,6 +1326,12 @@ static void config_server_load_cfg(char *cfg)
 	strcpy(device_config.gps_init, key->valuestring);
 	ESP_LOGI(TAG, "device_config.gps_init: %s", device_config.gps_init);
 
+	//*****
+	key = cJSON_GetObjectItem(root, "the_end");
+	if(key == 0 || strlen(key->valuestring) < 1 || key->valuestring[0] != '1') {
+		goto config_error;
+	}
+
 
 	//*****
 	return;
@@ -1630,7 +1633,6 @@ static void ws_tx_task(void *pvParameters)
 			if (ret != ESP_OK)
 			{
 	//	    	tcp_server_resume();
-				gpio_set_level(conn_led, 1);
 				xEventGroupClearBits( xServerEventGroup, WS_HANDLER_CONNECTED_BIT );
 	//	    	vTaskSuspend( NULL );
 
@@ -2021,11 +2023,10 @@ bool config_server_ws_connected(void)
 	return WS_HANDLER_CONNECTED_BIT == (xEventGroupGetBits(xServerEventGroup) & WS_HANDLER_CONNECTED_BIT);
 }
 
-void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, char * did)
+void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, char * did)
 {
     if (server == NULL) {
 		device_id = did;
-    	conn_led = connected_led;
     	xTX_Queue = xTXp_Queue;
     	xRX_Queue = xRXp_Queue;
         ESP_LOGI(TAG, "Starting webserver");

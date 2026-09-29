@@ -34,6 +34,6 @@ typedef struct
     twai_message_t frame;
 }mqtt_can_message_t;
 
-void mqtt_init(char* id, uint8_t connected_led, QueueHandle_t *xtx_queue);
+void mqtt_init(char* id, QueueHandle_t *xtx_queue);
 int mqtt_connected(void);
 #endif

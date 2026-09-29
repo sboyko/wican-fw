@@ -39,7 +39,7 @@ typedef enum {
     UART_GPS = 2,
 } UartMode;
 
-static const int UART_USB_BAUDRATE = 2400000; //460800
+static const int UART_USB_BAUDRATE = 460800; // 2400000
 static const int UART_RX_BUF_SIZE = 1024;
 static const int RX_QUEUE_WAIT_TIME_MS = 10;
 #define KWP_COMMAND_LENGHT 260 // maximum KWP message length in bytes (including header and CS)
@@ -219,7 +219,7 @@ static void uart_rx_task(void *arg)
                     if (size >= 0) {
                         sprintf(ws_data, "WAIT_%d\r", size);
                         uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-                        uart_wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
+                        uart_wait_mode = (size > 0);
                     }
                 }
 
@@ -233,7 +233,7 @@ static void uart_rx_task(void *arg)
             if (size >= 0) {
                 sprintf(ws_data, "WAIT_%d\r", size);
                 uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-                uart_wait_mode = (size > WICAN_RX_QUEUE_SIZE / 2);
+                uart_wait_mode = (size > 0);
 
                 vTaskDelay(pdMS_TO_TICKS(1)); // prevents spamming
             }

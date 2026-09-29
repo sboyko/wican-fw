@@ -124,7 +124,7 @@ typedef struct _device_config
 
 typedef struct QueueDefinition *QueueHandle_t;
 
-void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, char * did);
+void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, char * did);
 void config_server_restart(void);
 void config_server_stop(void);
 

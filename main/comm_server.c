@@ -42,7 +42,6 @@ int listen_sock;
 static EventGroupHandle_t xSocketEventGroup;
 static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static SemaphoreHandle_t xTCP_Socket_Semaphore;
-static int conn_led = GPIO_NUM_NC; // not connected
 
 static uint8_t udp_enable = 0;
 
@@ -330,7 +329,6 @@ accept_socket:
 			}
 			ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
 			xEventGroupSetBits( xSocketEventGroup, PORT_OPEN_BIT );
-			gpio_set_level(conn_led, 0);
 			xEventGroupWaitBits(
 					  xSocketEventGroup,   /* The event group being tested. */
 					  PORT_CLOSED_BIT, /* The bits within the event group to wait for. */
@@ -340,7 +338,6 @@ accept_socket:
 			xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 			ESP_LOGI(TAG, "Socket disconnected...");
 			notify_connection_closed(DEV_WIFI);
-			gpio_set_level(conn_led, 1);
 			shutdown(sock, 0);
 			close(sock);
 		}
@@ -349,7 +346,6 @@ accept_socket:
 			ESP_LOGI(TAG, "UDP socket ready");
 			xEventGroupClearBits(xSocketEventGroup, PORT_CLOSED_BIT);
 			xEventGroupSetBits( xSocketEventGroup, PORT_OPEN_BIT );
-			gpio_set_level(conn_led, 0);
             ESP_LOGI(TAG, "Waiting for data");
 
 			xEventGroupWaitBits(
@@ -362,7 +358,6 @@ accept_socket:
 			xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 			ESP_LOGI(TAG, "UDP socket error");
 
-			gpio_set_level(conn_led, 1);
 			shutdown(sock, 0);
 			close(sock);
 			goto CLEAN_UP;
@@ -426,12 +421,11 @@ int8_t tcp_port_open(void)
 TaskHandle_t xserver_handle = NULL;
 TaskHandle_t xtx_handle = NULL;
 TaskHandle_t xrx_handle = NULL;
-int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, int connected_led, uint8_t udp_en)
+int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint8_t udp_en)
 {
 	server_port = port;
 	xTX_Queue = xTXp_Queue;
 	xRX_Queue = xRXp_Queue;
-	conn_led = connected_led;
 	xTCP_Socket_Semaphore = xSemaphoreCreateMutex();
 	xSocketEventGroup = xEventGroupCreate();
 	xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );

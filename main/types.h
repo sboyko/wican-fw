@@ -46,6 +46,10 @@ typedef struct __xdev_buffer
 // Called from elm327 commands processor.
 void notify_send_status(const bool sent);
 
+// Updates status of recent receive() task (both CAN and K-Line).
+// Called from elm327 commands processor.
+void notify_recv_status();
+
 // Updates connection status with 'channel'.
 // Note that some channels cannot detect closing event (USB for example).
 void notify_connection_closed(const dev_channel_t channel);

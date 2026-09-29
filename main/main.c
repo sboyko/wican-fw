@@ -50,16 +50,15 @@
 
 #define TAG  __func__
 
-#define PWR_LED_GPIO_NUM       7  // blue (HL1 (USB/W) - 0: off / 1: on)
-#define CAN_TR_LED_GPIO_NUM    8  // green (HL5 (CAN TR) - 0: on / 1: off)
-#define CAN_RX_LED_GPIO_NUM    9  // yellow (HL6 (CAN RX) - 0: on / 1: off)
-
-#define GPS_POWER_GPIO_NUM     10 // (Выход/EN_VGPS)  Установка '1' включает питание приемника GPS (~ +3,3В). Установка '0' выключает питание GPS (состояние по-умолчанию).
 #define PRGEN_GPIO_NUM         2  // (Выход/nPRG_EN)  Установка '0' включает сигнал программирования PRG (~ +5В). Установка '1' выключает сигнал PRG (состояние по-умолчанию).
+#define WIC_TX_LED_GPIO_NUM    7  // (Выход/BLUE)  Установка '1' включает светодиод VD7 зеленого цвета. Установка '0' - выключает светодиод.
+#define CAN_TRES_GPIO_NUM      8  // (Выход/CAN_TRES)  Установка '0' подключает терминальный резистор CAN. Установка '1' отключает терминальный резистор CAN (состояние по-умолчанию).
+#define WIC_RX_LED_GPIO_NUM    9  // (Выход/nBOOT_ESP)  Установка '0' включает светодиод VD8 зеленого цвета. Установка '1' - выключает светодиод.
+#define GPS_POWER_GPIO_NUM     10 // (Выход/EN_VGPS)  Установка '1' включает питание приемника GPS (~ +3,3В). Установка '0' выключает питание GPS (состояние по-умолчанию).
 
 
 
-#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CAN_TR_LED_GPIO_NUM) | (1ULL<<CAN_RX_LED_GPIO_NUM) | (1ULL<<PWR_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<GPS_POWER_GPIO_NUM) | (1ULL<<PRGEN_GPIO_NUM))
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<CAN_TRES_GPIO_NUM) | (1ULL<<WIC_RX_LED_GPIO_NUM) | (1ULL<<WIC_TX_LED_GPIO_NUM) | (1ULL<<CAN_STDBY_GPIO_NUM) | (1ULL<<GPS_POWER_GPIO_NUM) | (1ULL<<PRGEN_GPIO_NUM))
 
 static QueueHandle_t xMsg_Tx_Queue, xmsg_ws_tx_queue, xmsg_ble_tx_queue, xmsg_uart_tx_queue, xmsg_kline_tx_queue;
 static QueueHandle_t xMsg_Rx_Queue, xmsg_mqtt_rx_queue, xmsg_kline_rx_queue;
@@ -116,32 +115,9 @@ static void elm327_log_can(twai_message_t *frame, uint8_t type)
 #endif
 }
 
-static void set_can_rx_led(bool state)
+static void set_wic_rx_led(const bool state)
 {
-	static bool current_state = false; // CAN RX 'off' on start
-	static int64_t next_check = 0;
-
-	if (!can_is_enabled()) {
-		if (!current_state)  {
-			return;
-		}
-	} else if (next_check > esp_timer_get_time()) {
-		return;
-	}
-
-	const bool new_state = (can_is_enabled() ? state : false);
-	if (current_state == new_state) {
-		return;
-	}
-
-	current_state = new_state;
-	gpio_set_level(CAN_RX_LED_GPIO_NUM, current_state ? 0 : 1);
-	next_check = esp_timer_get_time() +  20*1000;
-}
-
-static void set_power_led(bool state)
-{
-	static bool current_state = true; // WiCAN connected 'on' on start
+	static bool current_state = false; // WiCAN RX led 'off' on start
 	static int64_t next_check = 0;
 
 	if (next_check > esp_timer_get_time()) {
@@ -152,7 +128,24 @@ static void set_power_led(bool state)
 	}
 
 	current_state = state;
-	gpio_set_level(PWR_LED_GPIO_NUM, current_state ? 1 : 0);
+	gpio_set_level(WIC_RX_LED_GPIO_NUM, current_state ? 0 : 1);
+	next_check = esp_timer_get_time() +  20*1000;
+}
+
+static void set_wic_tx_led(const bool state)
+{
+	static bool current_state = true; // WiCAN TX led 'on' on start
+	static int64_t next_check = 0;
+
+	if (next_check > esp_timer_get_time()) {
+		return;
+	}
+	if (current_state == state) {
+		return;
+	}
+
+	current_state = state;
+	gpio_set_level(WIC_TX_LED_GPIO_NUM, current_state ? 1 : 0);
 	next_check = esp_timer_get_time() +  20*1000;
 }
 
@@ -332,8 +325,6 @@ static void can_rx_task(void *pvParameters)
 
 	while(true)
 	{
-		set_can_rx_led(false);
-
 		if (!can_is_enabled()) {
 			vTaskDelay(pdMS_TO_TICKS(10));
 			continue;
@@ -346,8 +337,6 @@ static void can_rx_task(void *pvParameters)
 			// 	(unsigned int)rx_msg.data[0], (unsigned int)rx_msg.data[1], (unsigned int)rx_msg.data[2],
 			// 	(unsigned int)rx_msg.data[3], (unsigned int)rx_msg.data[4], (unsigned int)rx_msg.data[5],
 			// 	(unsigned int)rx_msg.data[6], (unsigned int)rx_msg.data[7]);
-
-			set_can_rx_led(true);
 
 			ucTCP_TX_Buffer.ucElement[0] = 0;
 			ucTCP_TX_Buffer.usLen = 0;
@@ -376,7 +365,7 @@ static void can_rx_task(void *pvParameters)
 				}
 			} else { // no activity on WiCAN
 				can_disable();
-				gpio_set_level(CAN_TR_LED_GPIO_NUM, 1); // CAN TR 'off'
+				gpio_set_level(CAN_TRES_GPIO_NUM, 1); // CAN TR 'off'
 			}
 
 			if(mqtt_connected() && mqtt_elm327_log_en == 0)
@@ -476,7 +465,8 @@ static void ping_pong_task(void *pvParameters)
 	{
 		vTaskDelay(pdMS_TO_TICKS(20));
 
-		set_power_led(true);
+		set_wic_tx_led(true);
+		set_wic_rx_led(false);
 
 		/**
 		 * Acts so that WiCAN won't be silent for more than 500 ms.
@@ -495,8 +485,14 @@ static void ping_pong_task(void *pvParameters)
 void notify_send_status(const bool sent)
 {
 	if (sent) {
-		set_power_led(false); // reverse logic - each successful send results in temporary 'off'
+		set_wic_tx_led(false); // reverse logic - each successful send results in temporary 'off'
 	}
+}
+
+// API (declared in types.h)
+void notify_recv_status()
+{
+	set_wic_rx_led(true);
 }
 
 // API (declared in types.h)
@@ -588,9 +584,9 @@ void app_main(void)
 	//configure GPIO with the given settings
 	gpio_config(&io_conf);
 
-	gpio_set_level(PWR_LED_GPIO_NUM, 1); // WiCAN connected 'on'
-	gpio_set_level(CAN_TR_LED_GPIO_NUM, 1); // CAN TR 'off'
-	gpio_set_level(CAN_RX_LED_GPIO_NUM, 1); // CAN RX 'off'
+	gpio_set_level(WIC_TX_LED_GPIO_NUM, 1); // WiCAN TX led 'on'
+	gpio_set_level(CAN_TRES_GPIO_NUM, 1); // CAN TR 'off'
+	gpio_set_level(WIC_RX_LED_GPIO_NUM, 1); // WiCAN RX led 'off'
 	gpio_set_level(GPS_POWER_GPIO_NUM, 0); // GPS power 'off'
 	gpio_set_level(PRGEN_GPIO_NUM, 1); // PRGEN 'off'
 
@@ -608,7 +604,7 @@ void app_main(void)
 			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
 			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
 	
-	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, uid);
+	config_server_start(&xmsg_ws_tx_queue, &xMsg_Rx_Queue, uid);
 	slcan_init(&host_tx_task);
 
 	/*
@@ -672,11 +668,11 @@ void app_main(void)
 		if(config_server_mqtt_en_config() && config_server_mqtt_elm327_log())
 		{
 			mqtt_elm327_log_en = config_server_mqtt_elm327_log();
-			elm327_init(&host_tx_task, log_can_to_mqtt, CAN_TR_LED_GPIO_NUM, PRGEN_GPIO_NUM);
+			elm327_init(&host_tx_task, log_can_to_mqtt, CAN_TRES_GPIO_NUM, PRGEN_GPIO_NUM);
 		}
 		else
 		{
-			elm327_init(&host_tx_task, elm327_log_can, CAN_TR_LED_GPIO_NUM, PRGEN_GPIO_NUM);
+			elm327_init(&host_tx_task, elm327_log_can, CAN_TRES_GPIO_NUM, PRGEN_GPIO_NUM);
 		}
 
 		gps_nmea_init(&host_tx_task);
@@ -688,7 +684,7 @@ void app_main(void)
 		can_set_bitrate(can_datarate);
 		xmsg_mqtt_rx_queue = xQueueCreate(32, sizeof(mqtt_can_message_t) );
 		can_enable();
-		mqtt_init(uid, GPIO_NUM_NC, &xmsg_mqtt_rx_queue);
+		mqtt_init(uid, &xmsg_mqtt_rx_queue);
 	}
 //	else if(protocol == MQTT)
 //	{
@@ -696,7 +692,7 @@ void app_main(void)
 //		can_init(CAN_500K);
 //		can_enable();
 //
-//		mqtt_init(uid, GPIO_NUM_NC, &xmsg_mqtt_rx_queue);
+//		mqtt_init(uid, &xmsg_mqtt_rx_queue);
 //	}
 
 
@@ -704,7 +700,7 @@ void app_main(void)
 
 	if((config_server_get_wic_hsi() & WIC_HSI_WIFI) == WIC_HSI_WIFI)
 	{
-		tcp_server_init(config_server_get_wifi_ap_port(), &xMsg_Tx_Queue, &xMsg_Rx_Queue, GPIO_NUM_NC,
+		tcp_server_init(config_server_get_wifi_ap_port(), &xMsg_Tx_Queue, &xMsg_Rx_Queue,
 			config_server_get_wifi_ap_proto() == UDP_PORT ? 1 : 0);
 	}
 
@@ -715,7 +711,7 @@ void app_main(void)
 
 		uint32_t pass = config_server_get_ble_pass();
 		xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
-		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, GPIO_NUM_NC, pass, ble_uid);
+		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, pass, ble_uid);
 	}
 
 

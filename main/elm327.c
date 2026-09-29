@@ -1001,6 +1001,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 	twai_message_t rx_frame;
 	if (req_expected_rsp != 0) {
 		while( xQueueReceive(can_rx_queue, &rx_frame, 0) ) {
+			notify_recv_status();
 			// cleanup before new send request
 			ESP_LOGW(TAG, "skip before send %08X", (unsigned int)rx_frame.identifier&TWAI_EXTD_ID_MASK);
 		}
@@ -1037,6 +1038,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 		const int64_t txtime_local = esp_timer_get_time();
 
 		if (xQueueReceive(can_rx_queue, &rx_frame, 5)) {
+			notify_recv_status();
 			totalMs += elapsedTimeMs(txtime_local);
 
 			//reset timeout after response is received
@@ -1250,6 +1252,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 		const int64_t txtime_local = esp_timer_get_time();
 
 		if (xQueueReceive(*kline_rx_queue, &xsend_buffer, 5)) {
+			notify_recv_status();
 			totalMs += elapsedTimeMs(txtime_local);
 
 			const int data_offset = echo_length;
@@ -1457,6 +1460,8 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 		}
 
 		if (xQueueReceive(*kline_rx_queue, &xsend_buffer, pdMS_TO_TICKS(timeoutMs))) {
+			notify_recv_status();
+
 			const int data_offset = echo_length;
 			if (echo_length > 0) { // check echo bytes
 				const int echo_offset = (kwp_bytes_count - echo_length);
@@ -1490,6 +1495,8 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 
 	if (expectedReplySize < 0) { // read all remaining bytes
 		while (xQueueReceive(*kline_rx_queue, &xsend_buffer, 5)) {
+			notify_recv_status();
+
 			for (int i = 0; i < xsend_buffer.usLen; ++i) {
 				offset += sprintf(rsp + offset, "%02X", xsend_buffer.ucElement[i]);
 			}
