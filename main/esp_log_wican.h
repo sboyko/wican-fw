@@ -1,7 +1,18 @@
 #ifndef esp_log_wican_h
 #define esp_log_wican_h
 
-// Note: don't forget to turn off 'configUSE_TRACE_FACILITY' option
+/*
+Disable Application Logs (Compile-Time)
+ menuconfig -> Component config -> Log -> Log Level -> Default log verbosity = No output (CONFIG_LOG_DEFAULT_LEVEL_NONE=y)
+ menuconfig -> Bootloader config -> Log -> Bootloader log verbosity = No output (CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y)
+
+Disable the Hardware Console Output
+ menuconfig -> Component config -> ESP System Settings -> Channel for console output = None (CONFIG_ESP_CONSOLE_NONE=y)
+ menuconfig -> Boot ROM behavior = Permanently silent (The rom log behavior can only be changed for once, specific eFuse bit(s) will be burned at app boot stage.)
+*/
+
+// Note: don't forget to turn off 'configUSE_TRACE_FACILITY' (Enables additional structure members and functions to assist with execution visualization and tracing)
+//  menuconfig -> Component config -> FreeRTOS -> Kernel -> configUSE_TRACE_FACILITY (checkbox)
 
 // typedef enum {
 //     ESP_LOG_NONE    = 0,    /*!< No log output */
