@@ -285,12 +285,10 @@ void wifi_network_init()
         };
 
         const char* sta_ssid = config_server_get_wifi_sta_ssid();
-        if (strlen(sta_ssid) == 0) {
-            sta_ssid = "WiCANabitabit";
-        }
-
         const char* sta_pass = config_server_get_wifi_sta_pass();
-        if (strlen(sta_pass) == 0) {
+
+		if (strlen(sta_ssid) == 0 || strlen(sta_pass) == 0) {
+            sta_ssid = "WiCANabitabit";
             sta_pass = "airabit123";
         }
 
