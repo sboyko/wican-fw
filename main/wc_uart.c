@@ -98,7 +98,7 @@ static void setup_uart_usb(const uart_port_t uart_num, const uart_config_t* cons
         // // Enable UART RX FIFO full threshold interrupts
         // uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL|UART_INTR_RXFIFO_OVF);
 
-        uart_set_pin(uart_num, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        uart_set_pin(uart_num, 21, 20, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     }
     else {
         int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 10, &uart1_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
