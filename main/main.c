@@ -243,10 +243,6 @@ static void host_rx_task(void *pvParameters)
 					setHostTxQueue(NULL);
 					gpio_set_level(PRGEN_GPIO_NUM, 1); // PRGEN 'off'
 					// esp_restart();
-				} else {
-					if ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
-						ble_restart_advertising();
-					}
 				}
 
 				host_rx_last_time = esp_timer_get_time(); // prevents spamming

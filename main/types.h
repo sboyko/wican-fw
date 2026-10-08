@@ -61,4 +61,7 @@ void fill_adapter_name(char* name);
 // Prints (via ESP_LOGI) overall memory usage and the list of all tasksk with uxTaskGetStackHighWaterMark
 void debug_mem_usage();
 
+// Converts hexadecimal blob representation
+void elm327_fill_data_from_hex_str(const char *str, uint8_t *data, int data_length);
+
 #endif

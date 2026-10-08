@@ -55,6 +55,7 @@ static QueueHandle_t xip_Queue = NULL;
 
 static QueueHandle_t *xTX_Queue, *xRX_Queue;
 static esp_websocket_client_handle_t ws_client = NULL;
+static bool ws_connected = false;
 static bool ws_authenticated = false;
 
 httpd_handle_t server = NULL;
@@ -100,10 +101,13 @@ const char device_config_default[] = "{\
 \"sta_ssid\":\"\",\
 \"sta_pass\":\"\",\
 \"ws_addr\":\"ws://212.24.43.2:80\",\
+\"ws_uin\":\"\",\
+\"ws_aes\":\"\",\
+\"ws_prk\":\"\",\
 \"uart_baud\":\"460800\",\
-\"gps_sett\":\"9600_0_8_0\",\
+\"gps_sett\":\"9600 0 8 0\",\
 \"gps_init\":\"$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r\",\
-\"the_end\":\"1\"\
+\"the_end\":\"22\"\
 }";
 static device_config_t device_config;
 TimerHandle_t xrestartTimer;
@@ -518,6 +522,9 @@ static esp_err_t check_status_handler(httpd_req_t *req)
 	cJSON_AddStringToObject(root, "sta_ssid", device_config.sta_ssid);
 	//cJSON_AddStringToObject(root, "sta_pass", device_config.sta_pass);
 	cJSON_AddStringToObject(root, "ws_addr", device_config.ws_addr);
+	cJSON_AddStringToObject(root, "ws_uin", device_config.ws_uin);
+	//cJSON_AddStringToObject(root, "ws_aes", device_config.ws_aes);
+	//cJSON_AddStringToObject(root, "ws_prk", device_config.ws_prk);
 	cJSON_AddStringToObject(root, "uart_baud", device_config.uart_baud);
 	cJSON_AddStringToObject(root, "gps_sett", device_config.gps_sett);
 	cJSON_AddStringToObject(root, "gps_init", device_config.gps_init);
@@ -1304,6 +1311,30 @@ static void config_server_load_cfg(char *cfg)
 	ESP_LOGI(TAG, "device_config.ws_addr: %s", device_config.ws_addr);
 
 	//*****
+	key = cJSON_GetObjectItem(root, "ws_uin");
+	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.ws_uin)) {
+		goto config_error;
+	}
+	strcpy(device_config.ws_uin, key->valuestring);
+	ESP_LOGI(TAG, "device_config.ws_uin: %s", device_config.ws_uin);
+
+	//*****
+	key = cJSON_GetObjectItem(root, "ws_aes");
+	if(key == 0 || strlen(key->valuestring) > sizeof(device_config.ws_aes) * 2) {
+		goto config_error;
+	}
+	elm327_fill_data_from_hex_str(key->valuestring, (uint8_t*)device_config.ws_aes, strlen(key->valuestring) / 2);
+	ESP_LOGI(TAG, "device_config.ws_aes: %s", key->valuestring);
+
+	//*****
+	key = cJSON_GetObjectItem(root, "ws_prk");
+	if(key == 0 || strlen(key->valuestring) > sizeof(device_config.ws_prk) * 2) {
+		goto config_error;
+	}
+	elm327_fill_data_from_hex_str(key->valuestring, (uint8_t*)device_config.ws_prk, strlen(key->valuestring) / 2);
+	ESP_LOGI(TAG, "device_config.ws_prk: %s", key->valuestring);
+
+	//*****
 	key = cJSON_GetObjectItem(root, "uart_baud");
 	if(key == 0 || strlen(key->valuestring) < 2 || strlen(key->valuestring) >= sizeof(device_config.uart_baud)) {
 		goto config_error;
@@ -1329,7 +1360,7 @@ static void config_server_load_cfg(char *cfg)
 
 	//*****
 	key = cJSON_GetObjectItem(root, "the_end");
-	if(key == 0 || strlen(key->valuestring) < 1 || key->valuestring[0] != '1') {
+	if(key == 0 || strlen(key->valuestring) < 2 || memcmp(key->valuestring, "22", 2) != 0) {
 		goto config_error;
 	}
 
@@ -1567,10 +1598,10 @@ static httpd_handle_t config_httpd_start()
 
 static void ws_tx_task(void *pvParameters)
 {
-	xdev_buffer tx_buffer;
-	char ws_data[1024];
+	static char ws_data[1024]; // can go to .bss since task runs forever
 
-	httpd_ws_frame_t ws_pkt;  
+	xdev_buffer tx_buffer;
+	httpd_ws_frame_t ws_pkt;
 	memset(&ws_pkt, 0, sizeof(ws_pkt));
 	ws_pkt.type = HTTPD_WS_TYPE_TEXT;
 
@@ -1662,28 +1693,6 @@ static const char jwtPayload[] = {"{\
 \"timestamp\":\"%llu\"\
 }"};
 
-static const unsigned int REMOTE_TYPE_CLIENT = 0x200;
-
-// 'ABIT.client' EOL record (REMOTE_TYPE_CLIENT)
-// 
-// Note: access (REMOTE_TYPE_CLIENT below) is actually ignored and input 'roleType' is used
-//
-static const uint8_t eolRecords[] = {
-	0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // access (16) : Client
-	0x61, 0x67, 0x65, 0x6E, 0x74, 0x30, 0x30, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // customer UIN (16) : agent001
-	0x77, 0x69, 0x63, 0x30, 0x30, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // name (32) : wic001
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x92, 0xC6, 0x5A, 0x5A, 0xB8, 0x79, 0x55, 0x00, 0x73, 0x81, 0x90, 0xD6, 0xEE, 0x6A, 0xFB, 0xD0, // pk (64) Customer_AES
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x39, 0x89, 0xFC, 0xA4, 0x67, 0x46, 0x9C, 0x4B, 0x62, 0x39, 0x03, 0x25, 0xE5, 0x9B, 0xE0, 0xC7, // prk (32) Customer_PrK
-	0x20, 0x68, 0x99, 0x7F, 0xCA, 0x25, 0xEA, 0x08, 0x8B, 0xB3, 0x4C, 0x63, 0x6B, 0xA6, 0xF6, 0xC4, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // pk_2(64) NotUsed
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-};
 
 static const char* certAbitCA = "\
 -----BEGIN CERTIFICATE-----\n\
@@ -1702,31 +1711,6 @@ oShhfMC8to0lvsAtT9Y3v0ljAiEApBFyY0ccwoeAZSUWNk7tKg4BqiAuDMYw2cfS\n\
 zXapYsU=\n\
 -----END CERTIFICATE-----\n\
 ";
-
-
-typedef struct
-{
-	enum {
-		EOL__NUM_ECC_DIGITS = 32, // from ecc256.h
-		EOL__AES128_KEY_SIZE = 16, // from aes128.h
-	} Waste1;
-
-	enum {
-		EOL_RECORD_SIZE = 224,
-		EOL_RECORD_MAX_COUNT = 30,
-
-		EOL_SERVER_UIN_LENGTH = 16,
-		EOL_NAME_LENGTH = 32,
-
-		EOL_SERVER_UIN_OFFSET = 16,
-		EOL_NAME_OFFSET = (EOL_SERVER_UIN_OFFSET + EOL_SERVER_UIN_LENGTH),
-		EOL_PK1_OFFSET = (EOL_NAME_OFFSET + EOL_NAME_LENGTH),
-		EOL_PRK_OFFSET = (EOL_PK1_OFFSET + EOL__NUM_ECC_DIGITS * 2),
-		EOL_PK2_OFFSET = (EOL_PRK_OFFSET + EOL__NUM_ECC_DIGITS),
-	} Waste2;
-} EolRecord;
-
-static char authBuff[600];
 
 static char* base64urlEncoding(const void* data, const size_t dataLengh)
 {
@@ -1783,15 +1767,18 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 	// initialize JWT fields
 
 	// init 'jwt.customerUin'
-	const char* customerUin = (const char*)(eolRecords + EOL_SERVER_UIN_OFFSET);
+	const char* customerUin = config_server_get_ws_uin();
+	if (strlen(customerUin) == 0) {
+		ESP_LOGE(TAG, "Remote Client data not initialized");
+		return false;
+	}
 
 	// init 'jwt.guardantId' (uses WiCAN MAC address)
-	uint8_t derived_mac_addr[6] = {0};
 	char uid[14];
-	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	ESP_ERROR_CHECK(esp_read_mac(digest, ESP_MAC_WIFI_SOFTAP));
 	snprintf(uid, sizeof(uid), "%02x%02x%02x%02x%02x%02x",
-			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+			digest[0], digest[1], digest[2],
+			digest[3], digest[4], digest[5]);
 
 	// init 'jwt.iat' (Unix timestamp format - seconds elapsed since midnight on January 1, 1970, UTC)
 	const time_t seconds = time(NULL);
@@ -1810,19 +1797,29 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 
 	// init 'jwt.name'
 	fill_adapter_name((char*)digest);
+	
+	static const unsigned int REMOTE_TYPE_CLIENT = 0x200;
+	static const size_t EOL__NUM_ECC_DIGITS = 32; // from ecc256.h
+	static const size_t JWT_SERILIZED_MAX_SIZE = 600;
 
-	int realSize = snprintf(authBuff, sizeof(authBuff), jwtPayload,
+	char* authBuff = malloc(JWT_SERILIZED_MAX_SIZE);
+
+	int realSize = snprintf(authBuff, JWT_SERILIZED_MAX_SIZE, jwtPayload,
 			customerUin, uid, (int64_t)seconds, digest, nonceEnc, REMOTE_TYPE_CLIENT, timestamp);
 	free(nonceEnc);
 
-	if (realSize <= 0 || realSize >= sizeof(authBuff)) {
+	if (realSize <= 0 || realSize >= JWT_SERILIZED_MAX_SIZE) {
 		ESP_LOGE(TAG, "JWT payload buffer insufficient (%d)", realSize);
+		free(authBuff);
 		return false;
 	}
 
 	char* headerEnc = base64urlEncoding(jwtHeader, sizeof(jwtHeader));
 	char* payloadEnc = base64urlEncoding(authBuff, strlen(authBuff));
 	if (headerEnc == NULL || payloadEnc == NULL) {
+		free(headerEnc);
+		free(payloadEnc);
+		free(authBuff);
 		return false;
 	}
 
@@ -1837,11 +1834,11 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 	int result = mbedtls_sha256((const unsigned char*) authBuff, strlen(authBuff), digest, 0); // '0' for SHA-256
 	if (result != 0) {
 		ESP_LOGE(TAG, "mbedtls_sha256() fails, reason = %d", result);
+		free(authBuff);
 		return false;
 	}
 	reverse_buff(digest, sizeof(digest));
 
-	uint8_t* privateKey = (uint8_t*)(eolRecords + EOL_PRK_OFFSET);
 	unsigned char signature[EOL__NUM_ECC_DIGITS * 2];
 
 	int tries_count = 5;
@@ -1849,7 +1846,7 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 		unsigned char random[EOL__NUM_ECC_DIGITS];
 		esp_fill_random(random, sizeof(random));
 
-		if (ecdsa_sign(signature, signature + EOL__NUM_ECC_DIGITS, privateKey, random, digest) != 1) {
+		if (ecdsa_sign(signature, signature + EOL__NUM_ECC_DIGITS, config_server_get_ws_prk(), random, digest) != 1) {
 			ESP_LOGE(TAG, "ecdsa_sign() fails, repeat");
 		} else {
 			break;
@@ -1860,6 +1857,7 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 	
 	char* signatureEnc = base64urlEncoding(signature, sizeof(signature));
 	if (signatureEnc == NULL) {
+		free(authBuff);
 		return false;
 	}
 
@@ -1874,6 +1872,7 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 		ESP_LOGE(TAG, "esp_websocket_client_send() fails");
 	}
 
+	free(authBuff);
 	return true;
 }
 
@@ -1884,10 +1883,12 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     case WEBSOCKET_EVENT_CONNECTED:
         ESP_LOGI(TAG, "WEBSOCKET_EVENT_CONNECTED");
 		ws_authenticated = false;
+		ws_connected = true;
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "WEBSOCKET_EVENT_DISCONNECTED");
 		ws_authenticated = false;
+		ws_connected = false;
 		clear_perm_commands(true);
         break;
     case WEBSOCKET_EVENT_DATA:
@@ -1900,6 +1901,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
 		} else if (data->op_code == WS_TRANSPORT_OPCODES_CLOSE) {
 			ESP_LOGI(TAG, "Received close frame");
 			ws_authenticated = false;
+			ws_connected = false;
 			clear_perm_commands(true);
 			break; // will be handled by websocket_client implementation
 		}
@@ -1959,6 +1961,8 @@ static void ws_server_task_reset(esp_websocket_client_handle_t client)
 
 static void ws_server_rx_task(void *pvParameters)
 {
+	static char ws_addr[256]; // can go to .bss since task runs forever
+
 wait_wifi_station:
 	xEventGroupWaitBits(
 						xServerEventGroup,   /* The event group being tested. */
@@ -1967,7 +1971,7 @@ wait_wifi_station:
 						pdFALSE,       /* Don't wait for both bits, either bit will do. */
 						portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
 
-	char ws_addr[250] = {0};
+	ws_addr[0] = 0;
 	strcat(ws_addr, config_server_get_ws_addr());
 	strcat(ws_addr, "/stream/remote");
 	
@@ -1986,6 +1990,7 @@ wait_wifi_station:
 	}
 
 	ws_authenticated = false;
+	ws_connected = false;
 
 	ESP_LOGI(TAG, "WebSocket connecting to %s...", websocket_cfg.uri);
 
@@ -2400,6 +2405,30 @@ const char *config_server_get_ws_addr()
 /*
 * API
 */
+const char *config_server_get_ws_uin()
+{
+	return device_config.ws_uin;
+}
+
+/*
+* API
+*/
+const uint8_t *config_server_get_ws_aes()
+{
+	return (uint8_t*)device_config.ws_aes;
+}
+
+/*
+* API
+*/
+const uint8_t *config_server_get_ws_prk()
+{
+	return (uint8_t*)device_config.ws_prk;
+}
+
+/*
+* API
+*/
 uint32_t config_server_get_uart_baud()
 {
 	return strtoul(device_config.uart_baud, NULL, 10);
@@ -2424,7 +2453,7 @@ const char *config_server_get_gps_init()
 /*
 * impl
 */
-static int copyConfigString(const char* name, char* data, const size_t data_len)
+static int getConfigString(const char* name, char* data, const size_t data_len)
 {
 	cJSON* root = cJSON_Parse(device_config_file);
 	if (root == NULL) {
@@ -2447,21 +2476,28 @@ static int copyConfigString(const char* name, char* data, const size_t data_len)
 /*
 * impl
 */
-static bool setConfigString(const char* name, const char* value)
+struct NameValuePair {
+	const char* name;
+	const char* value;
+};
+static bool setConfigString(const struct NameValuePair* pairs, const size_t pairsCount)
 {
 	cJSON* root = cJSON_Parse(device_config_file);
 	if (root == NULL) {
 		return false;
 	}
-	cJSON* item = cJSON_GetObjectItem(root, name);
-	if (item == NULL) {
-		cJSON_Delete(root);
-		return false;
-	}
-	char* result = cJSON_SetValuestring(item, value);
-	if (result == NULL) {
-		cJSON_Delete(root);
-		return false;
+
+	for (size_t i = 0; i < pairsCount; ++i) {
+		cJSON* item = cJSON_GetObjectItem(root, pairs[i].name);
+		if (item == NULL) {
+			cJSON_Delete(root);
+			return false;
+		}
+		char* result = cJSON_SetValuestring(item, pairs[i].value);
+		if (result == NULL) {
+			cJSON_Delete(root);
+			return false;
+		}
 	}
 
 	char* resp_str = cJSON_Print(root);
@@ -2486,10 +2522,54 @@ static bool setConfigString(const char* name, const char* value)
 	return true;
 }
 
+/*
+* Handler for 'stc' commands (different password, used to exchange via Web Site).
+*/
+static int dispatchExport(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
+{
+	if (command == 1001) { // WiCAN initialization data (Customer UIN (16), Customer AES (16), Customer PrK (32))
+		if (data_len != 16 + 16 + 32) {
+			strcat(response, "malformed_command_data");
+			return -1;
+		}
+
+		char customerUin[16 + 1] = {0};
+		memcpy(customerUin, data, 16);
+
+		char customerAes[16*2 + 1] = {0};
+		for (int i = 0; i < 16; i++) {
+			sprintf(customerAes + i*2, "%02X", data[16 + i]);
+		}
+
+		char customerPrk[32*2 + 1] = {0};
+		for (int i = 0; i < 32; i++) {
+			sprintf(customerPrk + i*2, "%02X", data[32 + i]);
+		}
+
+		struct NameValuePair pairs[3] = {
+			{.name = "ws_uin", .value = customerUin},
+			{.name = "ws_aes", .value = customerAes},
+			{.name = "ws_prk", .value = customerPrk},
+		};
+		if (!setConfigString(pairs, 3)) {
+			strcat(response, "failed_save_web_init");
+			return -1;
+		}
+
+		xTimerStart(xrestartTimer, 10);
+
+		strcpy(response, "OK"); // same to 'ok_str'
+		return 1000; // indicates plain text result
+	}
+
+	strcat(response, "unknown_command");
+	return -1;
+}
+
 static uint8_t session_id[4] = { 0 }; // initialized in Ping command
-static bool session_valid = false;
 
 /*
+* Handler for 'stg' commands (main WiCAN password).
 * For all commands expected format: session_id(4) + command_data(data_len - 4)
 */
 static int dispatchSetting(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
@@ -2498,25 +2578,26 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 		strcat(response, "malformed_command_data");
 		return -1;
 	}
-	if (session_valid && command != 10) {
-		if (memcmp(data, session_id, sizeof(session_id) != 0)) {
-			strcat(response, "invalid_session");
-			return -1;
-		}
-	}
 
-	if (command == 10) { // Ping
+	if (command == 10) { // Ping (the only command which does not check 'sessionId')
 		memcpy(session_id, data, sizeof(session_id)); // initialize sessionId
-		session_valid = true;
 
 		memcpy(response, data, data_len);
 		reverse_buff(response, data_len); // reply is reversed 'sessionId'
 
 		return data_len;
 	}
-	else if (command == 11) { // Restart
+	
+	if (memcmp(data, session_id, sizeof(session_id) != 0)) {
+		strcat(response, "invalid_session");
+		return -1;
+	}
+
+	if (command == 11) { // Restart
 		xTimerStart(xrestartTimer, 10);
-		return 0;
+
+		strcpy(response, "OK"); // same to 'ok_str'
+		return 1000; // indicates plain text result
 	}
 
 	const uint8_t* cmd_data = data + sizeof(session_id);
@@ -2525,7 +2606,7 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 	if (command == 12) { // Get Setting
 		const char* setting_name = (const char*)cmd_data;
 
-		const int result_len = copyConfigString(setting_name, response, response_len);
+		const int result_len = getConfigString(setting_name, response, response_len);
 		if (result_len < 0) {
 			strcat(response, "failed_fetch_");
 			strcat(response, setting_name);
@@ -2538,14 +2619,34 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 		const char* setting_name = (const char*)cmd_data;
 		const char* setting_value = strchr(setting_name, '\0') + 1;
 
-		if (!setConfigString(setting_name, setting_value)) {
+		struct NameValuePair pairs[1] = { {.name = setting_name, .value = setting_value} };
+		if (!setConfigString(pairs, 1)) {
 			strcat(response, "failed_save_");
 			strcat(response, setting_name);
 			return -1;
 		}
 
-		strcat(response, "OK"); // same to 'ok_str'
-		return 2;
+		strcpy(response, "OK"); // same to 'ok_str'
+		return 1000; // indicates plain text result
+	}
+	else if (command == 20) { // Get WEB status
+		int status = 1; // online
+
+		if((config_server_get_wic_hsi() & WIC_HSI_WEB) != WIC_HSI_WEB) {
+			status = -1; // WEB Interface not active
+		} else if (!config_server_get_wifi_connected()) {
+			status = -2; // WiFi Station not connected
+		} else if (!ws_client) {
+			status = -3; // WS Session not started (internal error)
+		} else if (strlen(config_server_get_ws_uin()) == 0) {
+			status = -4; // WS Client data not initialized
+		} else if (!ws_connected) {
+			status = -5; // WS Client not connected to Server
+		} else if (!ws_authenticated) {
+			status = -6; // WS Client not authenticated on Server
+		}
+
+		return sprintf(response, "%d", status);
 	}
 	
 	strcat(response, "unknown_command");
@@ -2555,19 +2656,21 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 /*
 * API
 */
-void config_server_processSetting(const uint8_t* const cipherdata, const size_t cipherdata_len, char* const response)
+void config_server_processSetting(const uint8_t* const cipherdata, const size_t cipherdata_len, const char* psw, char* const response)
 {
-	mbedtls_gcm_context gcm;
+	static const size_t CMD_PDU_MAX_SIZE = 232;
+	mbedtls_gcm_context* gcm = malloc(sizeof(mbedtls_gcm_context));
+	uint8_t* data = malloc(CMD_PDU_MAX_SIZE);
+	char* outdata = malloc(CMD_PDU_MAX_SIZE);
 	bool processed = false;
-	uint8_t data[250] = {0};
 
 	while (true) {
-		if (!aes_gcm_init(&gcm)) {
+		if (!aes_gcm_init(gcm, psw)) {
 			strcat(response, "aes_gcm_init_failed");
 			break;
 		}
 
-		const int data_len = aes_gcm_decrypt(&gcm, cipherdata, cipherdata_len, data);
+		const int data_len = aes_gcm_decrypt(gcm, cipherdata, cipherdata_len, data);
 		if (data_len == -2) {
 			strcat(response, "Authentication_Failed");
 			break;
@@ -2580,35 +2683,48 @@ void config_server_processSetting(const uint8_t* const cipherdata, const size_t 
 		}
 		data[data_len] = 0; // so 'data' can be interpreted as null-terminated string
 
-		// Plain data format: command(2) + command_data(data_len - 2)
+		// Data format: command(2) + command_data(data_len - 2)
 		const int command = (data[0] + (data[1] << 8));
-		authBuff[0] = 0;
-		const int reply_len = dispatchSetting(command, data + 2, data_len - 2, authBuff, sizeof(authBuff));
-		if (reply_len < 0) {
-			strcat(response, authBuff);
-			break;
-		}
-		memcpy(data, authBuff, reply_len);
-
-		const int result_len = aes_gcm_encrypt(&gcm, data, reply_len, (uint8_t*)authBuff);
-		if (result_len < 0) {
-			strcat(response, "aes_gcm_encrypt_failed");
-			break;
+		outdata[0] = 0;
+		int reply_len = 0;
+		if (command > 1000 && command < 2000) {
+			// commands come from 'stc'
+			reply_len = dispatchExport(command, data + 2, data_len - 2, outdata, CMD_PDU_MAX_SIZE);
+		} else {
+			// commands come from 'stg'
+			reply_len = dispatchSetting(command, data + 2, data_len - 2, outdata, CMD_PDU_MAX_SIZE);
 		}
 
-		int offset = strlen(response);
-		for (int i = 0; i < result_len; i++) {
-			offset += sprintf(response + offset, "%02X", authBuff[i]);
+		if (reply_len < 0) { // error text
+			strcat(response, outdata);
+		} else if (reply_len > 230) { // plain text
+			strcpy(response, outdata);
+			processed = true;
+		} else { // reply for enciphering
+			memcpy(data, outdata, reply_len);
+
+			const int result_len = aes_gcm_encrypt(gcm, data, reply_len, (uint8_t*)outdata);
+			if (result_len < 0) {
+				strcat(response, "aes_gcm_encrypt_failed");
+				break;
+			}
+
+			int offset = strlen(response);
+			for (int i = 0; i < result_len; i++) {
+				offset += sprintf(response + offset, "%02X", outdata[i]);
+			}
+			processed = true;
 		}
 
-		processed = true;
 		break;
 	}
 
-	mbedtls_gcm_free(&gcm);
+	mbedtls_gcm_free(gcm);
+	free(gcm);
+	free(data);
+	free(outdata);
 
 	if (!processed) {
 		strcat(response, "CAN ERROR");
 	}
-
 }

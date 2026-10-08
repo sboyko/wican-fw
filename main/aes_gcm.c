@@ -1,7 +1,6 @@
 #include "aes_gcm.h"
 
 #include "esp_log_wican.h"
-#include "config_server.h"
 
 #include <string.h>
 #include <mbedtls/sha256.h>
@@ -22,14 +21,12 @@ static uint8_t gcm_aad[AES_TAG_LENGTH] = { 0xda, 0x15, 0x53, 0x9c, 0x6b, 0x70, 0
 /*
 * API
 */
-bool aes_gcm_init(mbedtls_gcm_context* gcm)
+bool aes_gcm_init(mbedtls_gcm_context* gcm, const char* psw)
 {
 	// Инициализация структуры mbedTLS
 	mbedtls_gcm_init(gcm);
 
 	// Установка ключа для шифрования
-	const char* psw = config_server_get_wic_pass();
-
 	uint8_t psw_digest[AES_KEY_BITS / 8];
 	int ret = mbedtls_sha256((const uint8_t*) psw, strlen(psw), psw_digest, 0); // '0' for SHA-256
 	if (ret != 0) {
@@ -43,10 +40,9 @@ bool aes_gcm_init(mbedtls_gcm_context* gcm)
 		return false;
 	}
 
-	uint8_t derived_mac_addr[6] = {0};
-	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
-	for (size_t i = 0, in = sizeof(derived_mac_addr); i < in; ++i) {
-		gcm_aad[i] = derived_mac_addr[i];
+	ESP_ERROR_CHECK(esp_read_mac(psw_digest, ESP_MAC_WIFI_SOFTAP));
+	for (size_t i = 0; i < 6; ++i) {
+		gcm_aad[i] = psw_digest[i];
 	}
 
 	return true;
@@ -57,6 +53,11 @@ bool aes_gcm_init(mbedtls_gcm_context* gcm)
 */
 int aes_gcm_decrypt(mbedtls_gcm_context* gcm, const uint8_t* const cipherdata, const size_t cipherdata_len, uint8_t* const plain_output)
 {
+	if (cipherdata_len < IV_LENGTH + AES_TAG_LENGTH + 1) {
+		ESP_LOGE(TAG, "Insufficient data length.");
+		return -2;
+	}
+
 	// Расшифрование с одновременной проверкой тега целостности
 	const uint8_t* iv = cipherdata;
 	const uint8_t* auth_tag = cipherdata + IV_LENGTH;

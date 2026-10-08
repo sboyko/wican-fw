@@ -5,7 +5,7 @@
 #include <mbedtls/gcm.h>
 
 
-bool aes_gcm_init(mbedtls_gcm_context* gcm);
+bool aes_gcm_init(mbedtls_gcm_context* gcm, const char* psw);
 
 /**
  * Decrypt ciphertext using AES-256-GCM

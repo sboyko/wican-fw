@@ -228,7 +228,10 @@ static unsigned int elm327_parse_hex_str(const char *str, int len)
     return result;
 }
 
-static void elm327_fill_data_from_hex_str(const char *str, uint8_t *data, int data_length)
+/*
+* API (declared in types.h)
+*/
+void elm327_fill_data_from_hex_str(const char *str, uint8_t *data, int data_length)
 {
 	assert(strlen(str) >= data_length * 2);
 
@@ -1790,17 +1793,23 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 			{
 				elm327_gps_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
 			}
-			else if(!strncmp(cmd_buffer, "stg", 3))
+			else if(!strncmp(cmd_buffer, "stg", 3) || !strncmp(cmd_buffer, "stc", 3))
 			{
+				const bool isExport = (strncmp(cmd_buffer, "stc", 3) == 0);
+				const uint8_t pswExport[7] = { 0x65, 0x32, 0x2d, 0x65, 0x34, 0x21, 0x00 }; // 'e2-e4!'
+
 				const size_t enc_data_len = (cmd_buffer_len - 3) / 2;
 				elm327_fill_data_from_hex_str(cmd_buffer + 3, (uint8_t*)cmd_response, enc_data_len);
 				
-				cmd_buffer[0] = 0;
-				strcat(cmd_buffer, "stg");
-				config_server_processSetting((const uint8_t*)cmd_response, enc_data_len, cmd_buffer);
+				cmd_buffer[3] = 0; // keep 'stg'/'stc'
+				config_server_processSetting((const uint8_t*)cmd_response, enc_data_len,
+						isExport ? (const char*)pswExport : config_server_get_wic_pass(),
+						cmd_buffer);
 
-				strcat(cmd_buffer, "\r>");
-				elm327_response(cmd_buffer, 0, q);
+				if (strlen(cmd_buffer) > 0) { // so that empty command will not reply
+					strcat(cmd_buffer, "\r>");
+					elm327_response(cmd_buffer, 0, q);
+				}
 			}
 			else if(!strncmp(cmd_buffer, "at", 2))
 			{

@@ -111,6 +111,15 @@ typedef struct _device_config
 	// URL of WebSocket server (up to 230 bytes, like 'ws://212.24.43.2:80' or 'wss://akm02.abit.spb.ru').
 	char ws_addr[232];
 
+	// Remote Customer UIN (up to 16 bytes, like 'agent001').
+	char ws_uin[18];
+
+	// Remote Customer AES (exactly 16 raw bytes).
+	char ws_aes[16];
+
+	// Remote Customer PrK (exactly 32 raw bytes).
+	char ws_prk[32];
+
 	// UART USB baudrate
 	char uart_baud[10];
 
@@ -200,6 +209,15 @@ const char *config_server_get_wifi_sta_pass();
 // URL of WebSocket server (up to 230 bytes)
 const char *config_server_get_ws_addr();
 
+// Remote Customer UIN (up to 16 bytes)
+const char *config_server_get_ws_uin();
+
+// Remote Customer AES (exactly 16 raw bytes)
+const uint8_t *config_server_get_ws_aes();
+
+// Remote Customer PrK (exactly 32 raw bytes)
+const uint8_t *config_server_get_ws_prk();
+
 // UART USB baudrate
 uint32_t config_server_get_uart_baud();
 
@@ -209,4 +227,4 @@ const char* config_server_get_gps_sett();
 // GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
 const char* config_server_get_gps_init();
 
-void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, char* const response);
+void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, const char* psw, char* const response);
