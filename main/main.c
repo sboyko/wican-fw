@@ -134,7 +134,7 @@ static void set_wic_rx_led(const bool state)
 
 static void set_wic_tx_led(const bool state)
 {
-	static bool current_state = true; // WiCAN TX led 'on' on start
+	static bool current_state = false; // WiCAN TX led 'off' on start
 	static int64_t next_check = 0;
 
 	if (next_check > esp_timer_get_time()) {
@@ -455,19 +455,90 @@ $PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
 	}
 }
 
+#define STEP_DELAY_MS  (20) // so ANIMATION_TIME_MS is 2000
+
+/* LED
+#include <driver/ledc.h>
+
+// Используем аппаратный ШИМ (LEDC) в ESP32-C3
+#define TOTAL_STEPS    (100)
+#define STEP_DELAY_MS  (20) // so ANIMATION_TIME_MS is 2000
+
+// Функция расчета ШИМ на основе кубического полинома (CIE 1931)
+// @param step Текущий шаг от 0 до TOTAL_STEPS
+// @return Значение duty cycle для 12-битного ШИМ (0-4095)
+//
+uint32_t calculate_log_duty(int step)
+{
+    // Приводим текущий шаг к нормализованному значению от 0.0 до 1.0
+    const float normalized = (float)step / (float)TOTAL_STEPS;
+    
+    // Кубический полином: y = x^3 * 4095
+    const float pwm_float = normalized * normalized * normalized * 4095.0f;
+    
+    // Округляем до ближайшего целого
+	const uint32_t result = (uint32_t)(pwm_float + 0.5f);
+
+    return result < 2 ? 2 : result; // WiCAN specific: не гасим в 0
+}
+*/
+
 static void ping_pong_task(void *pvParameters)
 {
+	/* LED
+	static const int LED_GPIO = WIC_TX_LED_GPIO_NUM; // GPIO пин светодиода
+	static const int LEDC_MODE = LEDC_LOW_SPEED_MODE;
+	static const int LEDC_CHANNEL = LEDC_CHANNEL_0;
+	static const int LEDC_TIMER = LEDC_TIMER_0;
+	static const int LEDC_RESOLUTION = LEDC_TIMER_12_BIT; // 0 - 4095
+	static const int LEDC_FREQUENCY = 5000;
+
+    // 1. Конфигурация аппаратного таймера
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_MODE,
+        .timer_num        = LEDC_TIMER,
+        .duty_resolution  = LEDC_RESOLUTION,
+        .freq_hz          = LEDC_FREQUENCY,
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // 2. Конфигурация канала ШИМ
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL,
+        .timer_sel      = LEDC_TIMER,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = LED_GPIO,
+        .duty           = 0,
+        .hpoint         = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+
+	int step = 0;
+	bool isFlareNotFade = true;
+	*/
+
 	while(true)
 	{
-		vTaskDelay(pdMS_TO_TICKS(20));
+		vTaskDelay(pdMS_TO_TICKS(STEP_DELAY_MS));
 
-		set_wic_tx_led(true);
+		/* LED
+		ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, calculate_log_duty(step));
+		ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+		
+		step += (isFlareNotFade ? 1 : -1);
+		if (step >= TOTAL_STEPS || step <= 0) {
+			isFlareNotFade = !isFlareNotFade;
+		}
+		*/
+
+		set_wic_tx_led(false);
 		set_wic_rx_led(false);
 
-		/**
-		 * Acts so that WiCAN won't be silent for more than 500 ms.
-		 * As the result host would respond with PING in case of no-send for over then 3s and also not in bulk-mode.
-		 */
+		// Acts so that WiCAN won't be silent for more than 500 ms.
+		// As the result host would respond with PING in case of no-send for over then 3s and also not in bulk-mode.
+		//
 		if (esp_timer_get_time() - host_tx_last_time > 500*1000) { // no send to host for 500ms
 			QueueHandle_t* const txQueue = getHostTxQueue();
 			if (txQueue) {
@@ -481,7 +552,7 @@ static void ping_pong_task(void *pvParameters)
 void notify_send_status(const bool sent)
 {
 	if (sent) {
-		set_wic_tx_led(false); // reverse logic - each successful send results in temporary 'off'
+		set_wic_tx_led(true);
 	}
 }
 
@@ -580,7 +651,7 @@ void app_main(void)
 	//configure GPIO with the given settings
 	gpio_config(&io_conf);
 
-	gpio_set_level(WIC_TX_LED_GPIO_NUM, 1); // WiCAN TX led 'on'
+	gpio_set_level(WIC_TX_LED_GPIO_NUM, 0); // WiCAN TX led 'off'
 	gpio_set_level(CAN_TRES_GPIO_NUM, 1); // CAN TR 'off'
 	gpio_set_level(WIC_RX_LED_GPIO_NUM, 1); // WiCAN RX led 'off'
 	gpio_set_level(GPS_POWER_GPIO_NUM, 0); // GPS power 'off'
