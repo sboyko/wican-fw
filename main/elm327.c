@@ -85,6 +85,7 @@ typedef struct __xelm327_config
 
 	uint8_t uds_rps_skip_prefix[8]; // can't be longer then CAN frame
 	int uds_rps_skip_size; // actual size of 'skip prefix', that is [1..8], 0 means not used
+	bool uds_rps_use_idle; // use idle (that is UDS TP) commands when skip mode is active
 	int uds_rps_last_rx_size; // value of 'rx queue size' which last sent to user when 'skip prefix' is active
 	int uds_rps_last_count;
 
@@ -160,6 +161,7 @@ static void elm327_set_default_config(bool reset_protocol)
 	elm327_config.perm_cmd_delay = 0;
 
 	elm327_config.uds_rps_skip_size = 0;
+	elm327_config.uds_rps_use_idle = false;
 
 	elm327_config.kline_baud = 10400; // baud rate
 	elm327_config.kline_parity = 0; // E_PARITY_N = 0, E_PARITY_O = 1, E_PARITY_E = 2, E_PARITY_M = 3, E_PARITY_S = 4,
@@ -928,7 +930,7 @@ int elm327_rx_queue_size(QueueHandle_t *rx_queue)
 
 	bool sendWait = false;
 	if (rx_size_round == 0 || rx_size_round == WICAN_RX_QUEUE_SIZE) {
-		sendWait = ((elm327_config.uds_rps_last_count % 10) == 0);
+		sendWait = ((elm327_config.uds_rps_last_count % 10) == 0 && elm327_config.uds_rps_last_count <= 100);
 		elm327_config.uds_rps_last_count += 1;
 	} else if (elm327_config.uds_rps_last_rx_size != rx_size_round) {
 		sendWait = true;
@@ -947,6 +949,7 @@ static void close_skip_mode()
 {
 	if (elm327_config.uds_rps_skip_size > 0) {
 		elm327_config.uds_rps_skip_size = 0;
+		elm327_config.uds_rps_use_idle = false;
 		ESP_LOGW(TAG, "UDS skip mode is off");
 	}
 }
@@ -1421,7 +1424,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 	}
 
 	// prepare COMM data
-	const int kwp_bytes_count = MIN(dataSize, KWP_COMMAND_LENGHT);
+	const size_t kwp_bytes_count = MIN(dataSize, KWP_COMMAND_LENGHT);
 	if (kwp_bytes_count == 0) {
 		elm327_response("com_empty_message_ CAN ERROR\r>", 0, q);
 		return;
@@ -1517,6 +1520,149 @@ static void elm327_comm_request(const char *cmd, const size_t cmd_len, QueueHand
 	elm327_comm_send(cmd, cmd_len, q, fnHasNewData);
 }
 
+static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
+{
+	if (elm327_config.uds_rps_skip_size == 0) {
+		elm327_response("com_not_in_bulk_mode_ CAN ERROR\r>", 0, q);
+		return;
+	}
+
+	// restore spaces for sscanf from "data_expectedReply_timeoutMs"
+	char *p = (char*)cmd;
+	while ((p = strchr(p, '_')) != NULL) {
+		*p = ' ';
+	}
+
+	size_t dataSize = 0;
+	const char *expectedReply = 0;
+	size_t expectedReplySize = 0;
+	int timeoutMs = 0;
+
+	p = (char*)cmd;
+	if ((p = strchr(p, ' ')) != NULL) {
+		*p = '\0';
+		dataSize = (p - cmd) / 2;
+		
+		p += 1;
+		expectedReply = p;
+		if ((p = strchr(p, ' ')) != NULL) {
+			*p = '\0';
+			expectedReplySize = (p - expectedReply) / 2;
+
+			sscanf(p + 1, "%d", &timeoutMs);
+		}
+	}
+
+	// update UDS skip mode
+	if (expectedReplySize == 0) {
+		elm327_response("com_empty_reply_message_ CAN ERROR\r>", 0, q);
+		close_skip_mode();
+		return;
+	}
+
+	elm327_fill_data_from_hex_str(expectedReply, elm327_config.uds_rps_skip_prefix, expectedReplySize);
+	elm327_config.uds_rps_skip_size = expectedReplySize;
+	elm327_config.uds_rps_use_idle = false;
+
+	// prepare COMM data
+	const size_t kwp_bytes_count = MIN(dataSize, KWP_COMMAND_LENGHT);
+	if (kwp_bytes_count == 0) {
+		elm327_response("com_empty_message_ CAN ERROR\r>", 0, q);
+		return;
+	}
+
+	char rsp[KWP_COMMAND_LENGHT];
+	elm327_fill_data_from_hex_str(cmd, (uint8_t *) rsp, kwp_bytes_count);
+
+	// clear incoming queue
+	xQueueReset(*kline_rx_queue);
+
+	// send KWP message
+	if (!elm327_response(rsp, kwp_bytes_count, kline_tx_queue)) {
+		elm327_response("com_send_fails_ CAN ERROR\r>", 0, q);
+		close_skip_mode();
+		notify_send_status(false);
+		return;
+	} else {
+		notify_send_status(true);
+	}
+
+	TickType_t totalMs = timeoutMs;
+	const int64_t txtime = esp_timer_get_time();
+
+	xdev_buffer xsend_buffer;
+	int echo_length = (elm327_config.kline_monoline == 1 ? kwp_bytes_count : 0);
+	int rsp_offset = 0;
+
+	while (true) {
+		const int64_t txtime_local = esp_timer_get_time();
+
+		if (xQueueReceive(*kline_rx_queue, &xsend_buffer, 5)) {
+			notify_recv_status();
+			totalMs += elapsedTimeMs(txtime_local);
+
+			const int data_offset = echo_length;
+			if (echo_length > 0) {
+				// check echo bytes
+				const int echo_offset = (kwp_bytes_count - echo_length);
+				for (int i = 0, in = MIN(echo_length, xsend_buffer.usLen); i < in; ++i) {
+					if (rsp[echo_offset + i] != xsend_buffer.ucElement[i]) {
+						elm327_response("com_echo_mismatch_ CAN ERROR\r>", 0, q);
+						close_skip_mode();
+						return;
+					}
+				}
+
+				if (echo_length > xsend_buffer.usLen) {
+					echo_length -= xsend_buffer.usLen;
+					xsend_buffer.usLen = 0;
+				} else {
+					xsend_buffer.usLen -= echo_length;
+					echo_length = 0;
+				}
+			}
+
+			for (int i = 0; i < xsend_buffer.usLen; ++i) {
+				if (rsp_offset < elm327_config.uds_rps_skip_size) {
+					if (xsend_buffer.ucElement[i + data_offset] != elm327_config.uds_rps_skip_prefix[rsp_offset]) {
+						elm327_response("com_response_mismatch_ CAN ERROR\r>", 0, q);
+						close_skip_mode();
+						return;
+					}
+				}
+				rsp_offset += 1;
+			}
+
+			if (rsp_offset >= elm327_config.uds_rps_skip_size) {
+				break; // done!
+			}
+		}
+		else
+		{
+			const TickType_t elapsedMs = elapsedTimeMs(txtime);
+			
+			if (elapsedMs >= totalMs) {
+				ESP_LOGW(TAG, "response timeout = %lu ms", elapsedMs);
+
+				strcpy(rsp, (echo_length != 0 ? "com_incomplete_echo_" : "com_incomplete_reply_"));
+				strcat(rsp, "NO DATA\r>");
+
+				elm327_response(rsp, 0, q);
+				close_skip_mode();
+
+				break;
+			}
+		}
+	}
+}
+
+static void elm327_comm_request_async(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
+{
+	wc_kline_update(true);
+
+	elm327_comm_send_async(cmd, cmd_len, q, fnHasNewData);
+}
+
 static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
 {
 	if (strncmp(cmd, "off", 3) == 0) {
@@ -1564,17 +1710,18 @@ bool elm327_process_perm_cmd(xdev_buffer *rx_buffer)
 // API
 bool elm327_process_idle_cmd(xdev_buffer *rx_buffer)
 {
-	if (elm327_config.uds_rps_skip_size == 1) { // K-Line
-		memcpy(rx_buffer->ucElement, "kwp8210F13E01C2\r", 16);
-		rx_buffer->usLen = 16;
-		return true;
-	} else if (elm327_config.uds_rps_skip_size == 2) { // CAN
-		memcpy(rx_buffer->ucElement, "023E01AAAAAAAAAA1\r", CMD_LENGTH + 1);
-		rx_buffer->usLen = CMD_LENGTH + 1;
-		return true;
-	} else {
-		return false;
+	if (elm327_config.uds_rps_use_idle) {
+		if (elm327_config.uds_rps_skip_size == 1) { // K-Line
+			memcpy(rx_buffer->ucElement, "kwp8210F13E01C2\r", 16);
+			rx_buffer->usLen = 16;
+			return true;
+		} else if (elm327_config.uds_rps_skip_size == 2) { // CAN
+			memcpy(rx_buffer->ucElement, "023E01AAAAAAAAAA1\r", CMD_LENGTH + 1);
+			rx_buffer->usLen = CMD_LENGTH + 1;
+			return true;
+		}
 	}
+	return false;
 }
 
 // API
@@ -1638,6 +1785,7 @@ static char* elm327_uds_response_skip(const char* command_str)
 	elm327_fill_data_from_hex_str(command_str + 4, elm327_config.uds_rps_skip_prefix, data_size);
 	
 	elm327_config.uds_rps_skip_size = data_size;
+	elm327_config.uds_rps_use_idle = true;
 	elm327_config.uds_rps_last_rx_size = -1;
 	elm327_config.uds_rps_last_count = 0;
 
@@ -1788,6 +1936,10 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 			else if(!strncmp(cmd_buffer, "com", 3))
 			{
 				elm327_comm_request(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
+			}
+			else if(!strncmp(cmd_buffer, "con", 3))
+			{
+				elm327_comm_request_async(cmd_buffer + 3, cmd_buffer_len - 3, q, fnHasNewData);
 			}
 			else if(!strncmp(cmd_buffer, "gps", 3))
 			{
