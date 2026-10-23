@@ -195,6 +195,13 @@ static QueueHandle_t* getHostTxQueue()
 
 static void setHostTxQueue(QueueHandle_t* const queue)
 {
+	QueueHandle_t* const txQueue = getHostTxQueue();
+	if (queue != NULL && txQueue != NULL && txQueue != queue) {
+		ESP_LOGE(TAG, "simultaneous session");
+		host_tx_task("simultaneous_session_UNABLETOCONNECT\r", 0, queue);
+		return;
+	}
+
 	QueueHandle_t* const old_txQueue = atomic_exchange(&host_txQueue, queue);
 
 	if (queue == NULL && old_txQueue != NULL) {
