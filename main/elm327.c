@@ -1017,7 +1017,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 	if (can_tx_task(&txframe) != ESP_OK) {
 		if (req_expected_rsp != 0 && req_expected_rsp != 0xFF) {
 			elm327_waiting_answer = false;
-			elm327_response("CAN ERROR\r>", 0, queue);
+			elm327_response("CANERROR\r>", 0, queue);
 			close_skip_mode();
 			return;
 		}
@@ -1184,7 +1184,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 				rx_frame.data[4] = ~rx_frame.data[3];
 
 				if (can_tx_task(txframe) != ESP_OK) {
-					elm327_response("CAN ERROR\r>", 0, queue);
+					elm327_response("CANERROR\r>", 0, queue);
 					close_skip_mode();
 					break;
 				}
@@ -1219,7 +1219,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 	// prepare KWP message
 	const int kwp_bytes_count = MIN(cmd_len / 2, KWP_COMMAND_LENGHT);
 	if (kwp_bytes_count == 0) {
-		elm327_response("kwp_empty_message_ CAN ERROR\r>", 0, q);
+		elm327_response("kwp_empty_message_CANERROR\r>", 0, q);
 		return;
 	}
 
@@ -1231,7 +1231,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 
 	// send KWP message
 	if (!elm327_response(rsp, kwp_bytes_count, kline_tx_queue)) {
-		elm327_response("kwp_send_fails_ CAN ERROR\r>", 0, q);
+		elm327_response("kwp_send_fails_CANERROR\r>", 0, q);
 		close_skip_mode();
 		notify_send_status(false);
 		return;
@@ -1267,7 +1267,7 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 				const int echo_offset = (kwp_bytes_count - echo_length);
 				for (int i = 0, in = MIN(echo_length, xsend_buffer.usLen); i < in; ++i) {
 					if (rsp[echo_offset + i] != xsend_buffer.ucElement[i]) {
-						elm327_response("kwp_echo_mismatch_ CAN ERROR\r>", 0, q);
+						elm327_response("kwp_echo_mismatch_CANERROR\r>", 0, q);
 						close_skip_mode();
 						return;
 					}
@@ -1381,7 +1381,7 @@ static void elm327_kline_baud(const char* command_str, QueueHandle_t *q)
 	if (wc_kline_set_baudrate(elm327_config.kline_baud, elm327_config.kline_parity, elm327_config.kline_data_bits, elm327_config.kline_stop_bits)) {
 		elm327_response("OK\r>", 0, q);
 	} else {
-		elm327_response("kwp_baud_fails_ CAN ERROR\r>", 0, q);
+		elm327_response("kwp_baud_fails_CANERROR\r>", 0, q);
 	}
 }
 
@@ -1426,7 +1426,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 	// prepare COMM data
 	const size_t kwp_bytes_count = MIN(dataSize, KWP_COMMAND_LENGHT);
 	if (kwp_bytes_count == 0) {
-		elm327_response("com_empty_message_ CAN ERROR\r>", 0, q);
+		elm327_response("com_empty_message_CANERROR\r>", 0, q);
 		return;
 	}
 
@@ -1438,7 +1438,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 
 	// send KWP message
 	if (!elm327_response(rsp, kwp_bytes_count, kline_tx_queue)) {
-		elm327_response("com_send_fails_ CAN ERROR\r>", 0, q);
+		elm327_response("com_send_fails_CANERROR\r>", 0, q);
 		notify_send_status(false);
 		return;
 	} else {
@@ -1473,7 +1473,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 				const int echo_offset = (kwp_bytes_count - echo_length);
 				for (int i = 0, in = MIN(echo_length, xsend_buffer.usLen); i < in; ++i) {
 					if (rsp[echo_offset + i] != xsend_buffer.ucElement[i]) {
-						elm327_response("com_echo_mismatch_ CAN ERROR\r>", 0, q);
+						elm327_response("com_echo_mismatch_CANERROR\r>", 0, q);
 						return;
 					}
 				}
@@ -1523,7 +1523,7 @@ static void elm327_comm_request(const char *cmd, const size_t cmd_len, QueueHand
 static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
 {
 	if (elm327_config.uds_rps_skip_size == 0) {
-		elm327_response("com_not_in_bulk_mode_ CAN ERROR\r>", 0, q);
+		elm327_response("com_not_in_bulk_mode_CANERROR\r>", 0, q);
 		return;
 	}
 
@@ -1555,7 +1555,7 @@ static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueH
 
 	// update UDS skip mode
 	if (expectedReplySize == 0) {
-		elm327_response("com_empty_reply_message_ CAN ERROR\r>", 0, q);
+		elm327_response("com_empty_reply_message_CANERROR\r>", 0, q);
 		close_skip_mode();
 		return;
 	}
@@ -1567,7 +1567,7 @@ static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueH
 	// prepare COMM data
 	const size_t kwp_bytes_count = MIN(dataSize, KWP_COMMAND_LENGHT);
 	if (kwp_bytes_count == 0) {
-		elm327_response("com_empty_message_ CAN ERROR\r>", 0, q);
+		elm327_response("com_empty_message_CANERROR\r>", 0, q);
 		return;
 	}
 
@@ -1579,7 +1579,7 @@ static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueH
 
 	// send KWP message
 	if (!elm327_response(rsp, kwp_bytes_count, kline_tx_queue)) {
-		elm327_response("com_send_fails_ CAN ERROR\r>", 0, q);
+		elm327_response("com_send_fails_CANERROR\r>", 0, q);
 		close_skip_mode();
 		notify_send_status(false);
 		return;
@@ -1607,7 +1607,7 @@ static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueH
 				const int echo_offset = (kwp_bytes_count - echo_length);
 				for (int i = 0, in = MIN(echo_length, xsend_buffer.usLen); i < in; ++i) {
 					if (rsp[echo_offset + i] != xsend_buffer.ucElement[i]) {
-						elm327_response("com_echo_mismatch_ CAN ERROR\r>", 0, q);
+						elm327_response("com_echo_mismatch_CANERROR\r>", 0, q);
 						close_skip_mode();
 						return;
 					}
@@ -1625,7 +1625,7 @@ static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueH
 			for (int i = 0; i < xsend_buffer.usLen; ++i) {
 				if (rsp_offset < elm327_config.uds_rps_skip_size) {
 					if (xsend_buffer.ucElement[i + data_offset] != elm327_config.uds_rps_skip_prefix[rsp_offset]) {
-						elm327_response("com_response_mismatch_ CAN ERROR\r>", 0, q);
+						elm327_response("com_response_mismatch_CANERROR\r>", 0, q);
 						close_skip_mode();
 						return;
 					}
@@ -1817,7 +1817,7 @@ static char* elm327_set_prgen(const char* command_str)
 		return (char*)ok_str;
 	}
 	
-	return "prgen_disabled_ CAN ERROR";
+	return "prgen_disabled_CANERROR";
 }
 
 static void fillDeviceInformation(char* buff)

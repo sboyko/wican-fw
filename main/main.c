@@ -193,13 +193,13 @@ static QueueHandle_t* getHostTxQueue()
 	return atomic_load(&host_txQueue);
 }
 
-static void setHostTxQueue(QueueHandle_t* const queue)
+static bool setHostTxQueue(QueueHandle_t* const queue)
 {
 	QueueHandle_t* const txQueue = getHostTxQueue();
 	if (queue != NULL && txQueue != NULL && txQueue != queue) {
 		ESP_LOGE(TAG, "simultaneous session");
-		host_tx_task("simultaneous_session_UNABLETOCONNECT\r", 0, queue);
-		return;
+		host_tx_task("simultaneous_session_UNABLETOCONNECT\r>", 0, queue);
+		return false;
 	}
 
 	QueueHandle_t* const old_txQueue = atomic_exchange(&host_txQueue, queue);
@@ -226,6 +226,8 @@ static void setHostTxQueue(QueueHandle_t* const queue)
 			}
 		}
 	}
+
+	return true;
 }
 
 static void host_rx_task(void *pvParameters)
@@ -278,14 +280,19 @@ static void host_rx_task(void *pvParameters)
 		uint8_t* msg_ptr = rx_buffer.ucElement;
 		int temp_len = rx_buffer.usLen;
 
+		QueueHandle_t* queue = NULL;
 		if(rx_buffer.dev_channel == DEV_WIFI) {
-			setHostTxQueue(&xMsg_Tx_Queue);
+			queue = &xMsg_Tx_Queue;
 		} else if(rx_buffer.dev_channel == DEV_BLE) {
-			setHostTxQueue(&xmsg_ble_tx_queue);
+			queue = &xmsg_ble_tx_queue;
 		} else if(rx_buffer.dev_channel == DEV_UART) {
-			setHostTxQueue(&xmsg_uart_tx_queue);
+			queue = &xmsg_uart_tx_queue;
 		} else { // if(rx_buffer.dev_channel == DEV_WIFI_WS) {
-			setHostTxQueue(&xmsg_ws_tx_queue);
+			queue = &xmsg_ws_tx_queue;
+		}
+
+		if (!setHostTxQueue(queue)) {
+			continue;
 		}
 
 		if(protocol == OBD_ELM327)

@@ -2725,6 +2725,6 @@ void config_server_processSetting(const uint8_t* const cipherdata, const size_t 
 	free(outdata);
 
 	if (!processed) {
-		strcat(response, "CAN ERROR");
+		strcat(response, "CANERROR");
 	}
 }
