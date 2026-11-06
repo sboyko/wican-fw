@@ -533,9 +533,10 @@ static void ping_pong_task(void *pvParameters)
 	bool isFlareNotFade = true;
 	*/
 
+	TickType_t prevWakeup = 0;
 	while(true)
 	{
-		vTaskDelay(pdMS_TO_TICKS(STEP_DELAY_MS));
+		vTaskDelayUntil(&prevWakeup, pdMS_TO_TICKS(STEP_DELAY_MS));
 
 		/* LED
 		ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, calculate_log_duty(step));

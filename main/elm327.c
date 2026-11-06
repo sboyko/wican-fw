@@ -1445,11 +1445,6 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 		notify_send_status(true);
 	}
 
-	if (expectedReplySize == 0) {
-		elm327_response("OK\r>", 0, q);
-		return;
-	}
-
 	const int64_t endTime = esp_timer_get_time() + timeoutMs * 1000;
 
 	xdev_buffer xsend_buffer;
@@ -1457,7 +1452,7 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 	int offset = 0;
 
 	int recvCount = 0;
-	while (recvCount < abs(expectedReplySize)) {
+	while (recvCount < abs(expectedReplySize) || echo_length > 0) {
 		if (endTime < esp_timer_get_time()) {
 			return; // timeout
 		}
@@ -1486,6 +1481,9 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 					echo_length = 0;
 
 					rsp[0] = 0;
+					if (expectedReplySize == 0) {
+						break;
+					}
 					strcat(rsp, "com");
 					offset = 3;
 				}
@@ -1497,6 +1495,12 @@ static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_
 				offset += sprintf(rsp + offset, "%02X", xsend_buffer.ucElement[i + data_offset]);
 			}
 		}
+	}
+
+	if (expectedReplySize == 0) {
+		vTaskDelay(pdMS_TO_TICKS(2)); // get a chance for Ecu to process data
+		elm327_response("OK\r>", 0, q);
+		return;
 	}
 
 	if (expectedReplySize < 0) { // read all remaining bytes
