@@ -2457,12 +2457,12 @@ static int getConfigString(const char* name, char* data, const size_t data_len)
 {
 	cJSON* root = cJSON_Parse(device_config_file);
 	if (root == NULL) {
-		return -1;
+		return ESP_FAIL;
 	}
 	
 	cJSON* item = cJSON_GetObjectItem(root, name);
 
-	int result = -1;
+	int result = ESP_FAIL;
 	if (item != NULL && strlen(item->valuestring) < data_len) {
 		strcpy(data, item->valuestring);
 		result = strlen(item->valuestring);
@@ -2522,6 +2522,126 @@ static bool setConfigString(const struct NameValuePair* pairs, const size_t pair
 	return true;
 }
 
+static const esp_partition_t* ota_update_partition = NULL;
+static esp_ota_handle_t ota_update_handle = 0; // set by esp_ota_begin(), must be freed via esp_ota_end()
+
+/*
+* First part of OTA process (Start-upload-finish)
+*/
+static int startOta(const size_t image_size, char* const response)
+{
+	if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
+		ble_disable();
+	}
+
+	if ((config_server_get_wic_hsi() & (WIC_HSI_WIFI | WIC_HSI_WEB)) != 0) {
+		config_server_stop();
+		//wifi_network_deinit();
+	}
+
+	can_disable();
+
+	ESP_LOGI(TAG, "Starting OTA");
+
+	const esp_partition_t *configured = esp_ota_get_boot_partition();
+	const esp_partition_t *running = esp_ota_get_running_partition();
+
+	if (configured != NULL && running != NULL) {
+		if (configured != running) {
+			ESP_LOGW(TAG, "Configured OTA boot partition at offset 0x%08lx, but running from offset 0x%08lx",
+					configured->address, running->address);
+			ESP_LOGW(TAG, "(This can happen if either the OTA boot data or preferred boot image become corrupted somehow.)");
+		}
+		ESP_LOGI(TAG, "Running partition type %d subtype %d (offset 0x%08lx)",
+				running->type, running->subtype, running->address);
+	}
+
+	ota_update_partition = esp_ota_get_next_update_partition(NULL);
+	if (ota_update_partition == NULL) {
+		strcat(response, "ota_no_app_slot");
+		return ESP_FAIL;
+	}
+	ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx",
+				ota_update_partition->subtype, ota_update_partition->address);
+
+	esp_err_t err = esp_ota_begin(ota_update_partition, image_size, &ota_update_handle);
+	if (err != ESP_OK) {
+		strcat(response, "ota_begin_failed_");
+		strcat(response, esp_err_to_name(err));
+
+		ota_update_partition = NULL;
+		return ESP_FAIL;
+	}
+
+	strcpy(response, "OK"); // same to 'ok_str'
+	return 1000; // indicates plain text result
+}
+
+/*
+* Second (repeated) part of OTA process (start-Upload-finish)
+*/
+static int uploadOta(const uint8_t* data, const size_t data_size, char* const response)
+{
+	if (ota_update_partition == NULL) {
+		strcat(response, "ota_no_app_slot");
+		return ESP_FAIL;
+	}
+
+	esp_err_t err = esp_ota_write(ota_update_handle, data, data_size);
+	if (err != ESP_OK) {
+		strcat(response, "ota_write_failed_");
+		strcat(response, esp_err_to_name(err));
+
+		esp_ota_abort(ota_update_handle);
+		ota_update_partition = NULL;
+		return ESP_FAIL;
+	}
+
+	//vTaskDelay(1);
+
+	strcpy(response, "OK"); // same to 'ok_str'
+	return 1000; // indicates plain text result
+}
+
+/*
+* Final part of OTA process (start-upload-Finish)
+* Note that device restart is scheduled
+*/
+static int finishOta(char* const response)
+{
+	if (ota_update_partition == NULL) {
+		strcat(response, "ota_no_app_slot");
+		return ESP_FAIL;
+	}
+
+	esp_err_t err = esp_ota_end(ota_update_handle);
+	if (err != ESP_OK) {
+		if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+			strcat(response, "image_is_corrupted");
+		} else {
+			strcat(response, "ota_end_failed_");
+			strcat(response, esp_err_to_name(err));
+		}
+
+		ota_update_partition = NULL;
+		return ESP_FAIL;
+	}
+
+	err = esp_ota_set_boot_partition(ota_update_partition);
+	if (err != ESP_OK) {
+		strcat(response, "ota_set_boot_failed_");
+		strcat(response, esp_err_to_name(err));
+
+		ota_update_partition = NULL;
+		return ESP_FAIL;
+	}
+
+	xTimerStart(xrestartTimer, 10);
+
+	strcpy(response, "OK"); // same to 'ok_str'
+	return 1000; // indicates plain text result
+}
+
 /*
 * Handler for 'stc' commands (different password, used to exchange via Web Site).
 */
@@ -2530,7 +2650,7 @@ static int dispatchExport(const int command, const uint8_t* const data, const si
 	if (command == 1001) { // WiCAN initialization data (Customer UIN (16), Customer AES (16), Customer PrK (32))
 		if (data_len != 16 + 16 + 32) {
 			strcat(response, "malformed_command_data");
-			return -1;
+			return ESP_FAIL;
 		}
 
 		char customerUin[16 + 1] = {0};
@@ -2553,7 +2673,7 @@ static int dispatchExport(const int command, const uint8_t* const data, const si
 		};
 		if (!setConfigString(pairs, 3)) {
 			strcat(response, "failed_save_web_init");
-			return -1;
+			return ESP_FAIL;
 		}
 
 		xTimerStart(xrestartTimer, 10);
@@ -2563,7 +2683,7 @@ static int dispatchExport(const int command, const uint8_t* const data, const si
 	}
 
 	strcat(response, "unknown_command");
-	return -1;
+	return ESP_FAIL;
 }
 
 static uint8_t session_id[4] = { 0 }; // initialized in Ping command
@@ -2576,7 +2696,7 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 {
 	if (data_len < sizeof(session_id)) {
 		strcat(response, "malformed_command_data");
-		return -1;
+		return ESP_FAIL;
 	}
 
 	if (command == 10) { // Ping (the only command which does not check 'sessionId')
@@ -2590,7 +2710,7 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 	
 	if (memcmp(data, session_id, sizeof(session_id) != 0)) {
 		strcat(response, "invalid_session");
-		return -1;
+		return ESP_FAIL;
 	}
 
 	if (command == 11) { // Restart
@@ -2601,7 +2721,7 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 	}
 
 	const uint8_t* cmd_data = data + sizeof(session_id);
-	//const size_t cmd_len = data_len - sizeof(session_id);
+	const size_t cmd_len = data_len - sizeof(session_id);
 
 	if (command == 12) { // Get Setting
 		const char* setting_name = (const char*)cmd_data;
@@ -2610,7 +2730,7 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 		if (result_len < 0) {
 			strcat(response, "failed_fetch_");
 			strcat(response, setting_name);
-			return -1;
+			return ESP_FAIL;
 		}
 
 		return result_len;
@@ -2623,7 +2743,7 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 		if (!setConfigString(pairs, 1)) {
 			strcat(response, "failed_save_");
 			strcat(response, setting_name);
-			return -1;
+			return ESP_FAIL;
 		}
 
 		strcpy(response, "OK"); // same to 'ok_str'
@@ -2648,9 +2768,22 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 
 		return sprintf(response, "%d", status);
 	}
+	else if (command == 30) { // Start OTA
+		uint32_t image_size = 0;
+		if (cmd_len >= sizeof(image_size)) {
+			memcpy(&image_size, cmd_data, sizeof(image_size));
+		}
+		return startOta(image_size, response);
+	}
+	else if (command == 31) { // Upload OTA data
+		return uploadOta(cmd_data, cmd_len, response);
+	}
+	else if (command == 32) { // Finish OTA (and schedule restart)
+		return finishOta(response);
+	}
 	
 	strcat(response, "unknown_command");
-	return -1;
+	return ESP_FAIL;
 }
 
 /*

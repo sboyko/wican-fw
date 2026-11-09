@@ -676,7 +676,20 @@ void app_main(void)
 	xMsg_Tx_Queue = xQueueCreate(32, sizeof( xdev_buffer) ); // TCP TX queue
 	xmsg_ws_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // WS TX queue
 
-	esp_ota_mark_app_valid_cancel_rollback();
+	const esp_partition_t *running = esp_ota_get_running_partition();
+	esp_ota_img_states_t ota_state;
+	if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
+		if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+			bool diagnostic_is_ok = true; //diagnostic(); // run diagnostic function ...
+			if (diagnostic_is_ok) {
+				ESP_LOGI(TAG, "Diagnostics completed successfully! Continuing execution ...");
+				esp_ota_mark_app_valid_cancel_rollback();
+			} else {
+				ESP_LOGE(TAG, "Diagnostics failed! Start rollback to the previous version ...");
+				esp_ota_mark_app_invalid_rollback_and_reboot();
+			}
+		}
+	}
 
 	char uid[33];
 
@@ -797,7 +810,6 @@ void app_main(void)
 	}
 
 
-	const esp_partition_t *running = esp_ota_get_running_partition();
 	esp_app_desc_t running_app_info;
 	if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK)
 	{
