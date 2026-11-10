@@ -21,6 +21,7 @@
 #include <esp_timer.h>
 #include <esp_ota_ops.h>
 #include <esp_mac.h>
+#include <esp_flash_encrypt.h>
 
 #include "esp_log_wican.h"
 #include "can.h"
@@ -1834,17 +1835,16 @@ static void fillDeviceInformation(char* buff)
 	const esp_partition_t* running = esp_ota_get_running_partition();
 	esp_app_desc_t running_app_info;
 	if (running && esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
-		const char* projectType = (strstr(running_app_info.project_name, "usb") != 0 ? "usb" : "obd");
-
 		offset += sprintf(buff + offset, "fv:%c%c.%c%c,",
 			running_app_info.version[0], running_app_info.version[1],
 			running_app_info.version[2], running_app_info.version[3]
 		);
 
-		offset += sprintf(buff + offset, "hv:%c%c.%c%c_%s,",
+		offset += sprintf(buff + offset, "hv:%c%c.%c%c_%s{%s},",
 			running_app_info.version[6], running_app_info.version[7],
 			running_app_info.version[8], running_app_info.version[9],
-			projectType
+			(strstr(running_app_info.project_name, "usb") != 0 ? "usb" : "obd"),
+			(esp_flash_encryption_cfg_verify_release_mode() ? "rel" : "dev")
 		);
 	} else {
 		offset += sprintf(buff + offset, "fv:__,hv:__,");
