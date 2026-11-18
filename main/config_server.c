@@ -28,6 +28,7 @@
 #include <esp_http_server.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
+#include "mbedtls/platform_util.h"
 #include <esp_mac.h>
 
 #include "esp_log_wican.h"
@@ -1775,7 +1776,7 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 
 	// init 'jwt.guardantId' (uses WiCAN MAC address)
 	char uid[14];
-	ESP_ERROR_CHECK(esp_read_mac(digest, ESP_MAC_WIFI_SOFTAP));
+	ESP_ERROR_CHECK(esp_efuse_mac_get_default(digest));
 	snprintf(uid, sizeof(uid), "%02x%02x%02x%02x%02x%02x",
 			digest[0], digest[1], digest[2],
 			digest[3], digest[4], digest[5]);
@@ -2574,7 +2575,7 @@ static int startOta(const size_t image_size, char* const response)
 	}
 
 	strcpy(response, "OK"); // same to 'ok_str'
-	return 1000; // indicates plain text result
+	return 1000; // indicates plain text
 }
 
 /*
@@ -2600,7 +2601,7 @@ static int uploadOta(const uint8_t* data, const size_t data_size, char* const re
 	//vTaskDelay(1);
 
 	strcpy(response, "OK"); // same to 'ok_str'
-	return 1000; // indicates plain text result
+	return 1000; // indicates plain text
 }
 
 /*
@@ -2639,15 +2640,90 @@ static int finishOta(char* const response)
 	xTimerStart(xrestartTimer, 10);
 
 	strcpy(response, "OK"); // same to 'ok_str'
-	return 1000; // indicates plain text result
+	return 1000; // indicates plain text
 }
 
 /*
-* Handler for 'stc' commands (different password, used to exchange via Web Site).
+* Handler for WiCAN commands.
 */
-static int dispatchExport(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
+static const uint16_t CMD_PING = 10;
+static const uint16_t CMD_RESTART = 11;
+
+static const uint16_t CMD_GET_SETTING = 12;
+static const uint16_t CMD_SET_SETTING = 13;
+
+static const uint16_t CMD_WEB_STATUS = 20;
+static const uint16_t CMD_WEB_SET_CUSTOMER = 21;
+
+static const uint16_t CMD_OTA_START = 30;
+static const uint16_t CMD_OTA_UPLOAD = 31;
+static const uint16_t CMD_OTA_FINISH = 32;
+
+static int dispatchSetting(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
 {
-	if (command == 1001) { // WiCAN initialization data (Customer UIN (16), Customer AES (16), Customer PrK (32))
+	switch (command) {
+
+	case CMD_PING: {
+		strcpy(response, "OK"); // same to 'ok_str'
+		return 1000; // indicates plain text
+	}
+
+	case CMD_RESTART: {
+		xTimerStart(xrestartTimer, 10);
+
+		strcpy(response, "OK"); // same to 'ok_str'
+		return 1000; // indicates plain text
+	}
+
+	case CMD_GET_SETTING: {
+		const char* setting_name = (const char*)data;
+
+		const int result_len = getConfigString(setting_name, response, response_len);
+		if (result_len < 0) {
+			strcat(response, "failed_fetch_");
+			strcat(response, setting_name);
+			return ESP_FAIL;
+		}
+
+		return result_len;
+	}
+
+	case CMD_SET_SETTING: {
+		const char* setting_name = (const char*)data;
+		const char* setting_value = strchr(setting_name, '\0') + 1;
+
+		struct NameValuePair pairs[1] = { {.name = setting_name, .value = setting_value} };
+		if (!setConfigString(pairs, 1)) {
+			strcat(response, "failed_save_");
+			strcat(response, setting_name);
+			return ESP_FAIL;
+		}
+
+		strcpy(response, "OK"); // same to 'ok_str'
+		return 1000; // indicates plain text
+	}
+
+	case CMD_WEB_STATUS: {
+		int status = 1; // online
+
+		if((config_server_get_wic_hsi() & WIC_HSI_WEB) != WIC_HSI_WEB) {
+			status = -1; // WEB Interface not active
+		} else if (!config_server_get_wifi_connected()) {
+			status = -2; // WiFi Station not connected
+		} else if (!ws_client) {
+			status = -3; // WS Session not started (internal error)
+		} else if (strlen(config_server_get_ws_uin()) == 0) {
+			status = -4; // WS Client data not initialized
+		} else if (!ws_connected) {
+			status = -5; // WS Client not connected to Server
+		} else if (!ws_authenticated) {
+			status = -6; // WS Client not authenticated on Server
+		}
+
+		return sprintf(response, "%d", status);
+	}
+
+	case CMD_WEB_SET_CUSTOMER: { // WiCAN initialization data (Customer UIN (16), Customer AES (16), Customer PrK (32))
 		if (data_len != 16 + 16 + 32) {
 			strcat(response, "malformed_command_data");
 			return ESP_FAIL;
@@ -2679,154 +2755,74 @@ static int dispatchExport(const int command, const uint8_t* const data, const si
 		xTimerStart(xrestartTimer, 10);
 
 		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text result
+		return 1000; // indicates plain text
 	}
 
-	strcat(response, "unknown_command");
-	return ESP_FAIL;
-}
-
-static uint8_t session_id[4] = { 0 }; // initialized in Ping command
-
-/*
-* Handler for 'stg' commands (main WiCAN password).
-* For all commands expected format: session_id(4) + command_data(data_len - 4)
-*/
-static int dispatchSetting(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
-{
-	if (data_len < sizeof(session_id)) {
-		strcat(response, "malformed_command_data");
-		return ESP_FAIL;
-	}
-
-	if (command == 10) { // Ping (the only command which does not check 'sessionId')
-		memcpy(session_id, data, sizeof(session_id)); // initialize sessionId
-
-		memcpy(response, data, data_len);
-		reverse_buff(response, data_len); // reply is reversed 'sessionId'
-
-		return data_len;
-	}
-	
-	if (memcmp(data, session_id, sizeof(session_id) != 0)) {
-		strcat(response, "invalid_session");
-		return ESP_FAIL;
-	}
-
-	if (command == 11) { // Restart
-		xTimerStart(xrestartTimer, 10);
-
-		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text result
-	}
-
-	const uint8_t* cmd_data = data + sizeof(session_id);
-	const size_t cmd_len = data_len - sizeof(session_id);
-
-	if (command == 12) { // Get Setting
-		const char* setting_name = (const char*)cmd_data;
-
-		const int result_len = getConfigString(setting_name, response, response_len);
-		if (result_len < 0) {
-			strcat(response, "failed_fetch_");
-			strcat(response, setting_name);
-			return ESP_FAIL;
-		}
-
-		return result_len;
-	}
-	else if (command == 13) { // Set Setting
-		const char* setting_name = (const char*)cmd_data;
-		const char* setting_value = strchr(setting_name, '\0') + 1;
-
-		struct NameValuePair pairs[1] = { {.name = setting_name, .value = setting_value} };
-		if (!setConfigString(pairs, 1)) {
-			strcat(response, "failed_save_");
-			strcat(response, setting_name);
-			return ESP_FAIL;
-		}
-
-		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text result
-	}
-	else if (command == 20) { // Get WEB status
-		int status = 1; // online
-
-		if((config_server_get_wic_hsi() & WIC_HSI_WEB) != WIC_HSI_WEB) {
-			status = -1; // WEB Interface not active
-		} else if (!config_server_get_wifi_connected()) {
-			status = -2; // WiFi Station not connected
-		} else if (!ws_client) {
-			status = -3; // WS Session not started (internal error)
-		} else if (strlen(config_server_get_ws_uin()) == 0) {
-			status = -4; // WS Client data not initialized
-		} else if (!ws_connected) {
-			status = -5; // WS Client not connected to Server
-		} else if (!ws_authenticated) {
-			status = -6; // WS Client not authenticated on Server
-		}
-
-		return sprintf(response, "%d", status);
-	}
-	else if (command == 30) { // Start OTA
+	case CMD_OTA_START: {
 		uint32_t image_size = 0;
-		if (cmd_len >= sizeof(image_size)) {
-			memcpy(&image_size, cmd_data, sizeof(image_size));
+		if (data_len >= sizeof(image_size)) {
+			memcpy(&image_size, data, sizeof(image_size));
 		}
 		return startOta(image_size, response);
 	}
-	else if (command == 31) { // Upload OTA data
-		return uploadOta(cmd_data, cmd_len, response);
+
+	case CMD_OTA_UPLOAD: {
+		return uploadOta(data, data_len, response);
 	}
-	else if (command == 32) { // Finish OTA (and schedule restart)
+
+	case CMD_OTA_FINISH: {
 		return finishOta(response);
 	}
-	
-	strcat(response, "unknown_command");
-	return ESP_FAIL;
+
+	default: {
+		strcat(response, "unknown_command");
+		return ESP_FAIL;
+	}
+
+	}
 }
 
 /*
 * API
 */
-void config_server_processSetting(const uint8_t* const cipherdata, const size_t cipherdata_len, const char* psw, char* const response)
+void config_server_processSetting(const uint8_t* const cipherdata, const size_t cipherdata_len, const bool isExport, char* const response)
 {
-	static const size_t CMD_PDU_MAX_SIZE = 232;
-	mbedtls_gcm_context* gcm = malloc(sizeof(mbedtls_gcm_context));
+	static uint16_t g_command_counter = 0;
+
+	if (!aes_gcm_init(cipherdata, cipherdata_len, isExport, response)) {
+		if (strlen(response) > 0) {
+			strcat(response, "CANERROR");
+		}
+		g_command_counter = 0;
+		return;
+	}
+
+	static const size_t CMD_PDU_MAX_SIZE = 233;
 	uint8_t* data = malloc(CMD_PDU_MAX_SIZE);
 	char* outdata = malloc(CMD_PDU_MAX_SIZE);
 	bool processed = false;
 
 	while (true) {
-		if (!aes_gcm_init(gcm, psw)) {
-			strcat(response, "aes_gcm_init_failed");
+		const int data_len = aes_gcm_decrypt(cipherdata, cipherdata_len, data, response);
+		if (data_len < 0) {
 			break;
 		}
 
-		const int data_len = aes_gcm_decrypt(gcm, cipherdata, cipherdata_len, data);
-		if (data_len == -2) {
-			strcat(response, "Authentication_Failed");
-			break;
-		} else if (data_len == -1) {
-			strcat(response, "aes_gcm_decrypt_failed");
-			break;
-		} else if (data_len < 2) {
+		// PDU Payload = cmd(2) + cmd_counter(2) + data(up to 228)
+		if (data_len < 4) {
 			strcat(response, "malformed_pdu_data");
 			break;
 		}
-		data[data_len] = 0; // so 'data' can be interpreted as null-terminated string
+		const uint16_t cmd = (data[0] + (data[1] << 8));
+		const uint16_t cmd_counter = (data[2] + (data[3] << 8));
 
-		// Data format: command(2) + command_data(data_len - 2)
-		const int command = (data[0] + (data[1] << 8));
-		outdata[0] = 0;
-		int reply_len = 0;
-		if (command > 1000 && command < 2000) {
-			// commands come from 'stc'
-			reply_len = dispatchExport(command, data + 2, data_len - 2, outdata, CMD_PDU_MAX_SIZE);
-		} else {
-			// commands come from 'stg'
-			reply_len = dispatchSetting(command, data + 2, data_len - 2, outdata, CMD_PDU_MAX_SIZE);
+		if (cmd_counter != g_command_counter) {
+			strcat(response, "invalid_session");
+			break;
 		}
+
+		outdata[0] = 0;
+		const int reply_len = dispatchSetting(cmd, data + 4, data_len - 4, outdata, CMD_PDU_MAX_SIZE - 1);
 
 		if (reply_len < 0) { // error text
 			strcat(response, outdata);
@@ -2834,9 +2830,7 @@ void config_server_processSetting(const uint8_t* const cipherdata, const size_t 
 			strcpy(response, outdata);
 			processed = true;
 		} else { // reply for enciphering
-			memcpy(data, outdata, reply_len);
-
-			const int result_len = aes_gcm_encrypt(gcm, data, reply_len, (uint8_t*)outdata);
+			const int result_len = aes_gcm_encrypt((const uint8_t*)outdata, reply_len, data, response);
 			if (result_len < 0) {
 				strcat(response, "aes_gcm_encrypt_failed");
 				break;
@@ -2844,7 +2838,7 @@ void config_server_processSetting(const uint8_t* const cipherdata, const size_t 
 
 			int offset = strlen(response);
 			for (int i = 0; i < result_len; i++) {
-				offset += sprintf(response + offset, "%02X", outdata[i]);
+				offset += sprintf(response + offset, "%02X", data[i]);
 			}
 			processed = true;
 		}
@@ -2852,12 +2846,14 @@ void config_server_processSetting(const uint8_t* const cipherdata, const size_t 
 		break;
 	}
 
-	mbedtls_gcm_free(gcm);
-	free(gcm);
+	mbedtls_platform_zeroize(data, CMD_PDU_MAX_SIZE);
 	free(data);
+	mbedtls_platform_zeroize(outdata, CMD_PDU_MAX_SIZE);
 	free(outdata);
 
-	if (!processed) {
+	if (processed) {
+		g_command_counter += 1;
+	} else {
 		strcat(response, "CANERROR");
 	}
 }

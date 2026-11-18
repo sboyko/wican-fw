@@ -47,6 +47,7 @@
 #include "esp_log_wican.h"
 #include "gps_common.h"
 #include "gps_nmea.h"
+#include "aes_gcm.h"
 
 #define TAG  __func__
 
@@ -251,6 +252,7 @@ static void host_rx_task(void *pvParameters)
 				if (getHostTxQueue()) {
 					setHostTxQueue(NULL);
 					gpio_set_level(PRGEN_GPIO_NUM, 1); // PRGEN 'off'
+					aes_gcm_cleanup();
 					// esp_restart();
 				}
 
@@ -590,7 +592,7 @@ void fill_adapter_name(char* name)
 	const char* adapter_name = config_server_get_wic_name();
 
 	uint8_t derived_mac_addr[6] = {0};
-	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	ESP_ERROR_CHECK(esp_efuse_mac_get_default(derived_mac_addr));
 	snprintf(name, 32, "WiC_%s%s%02x%02x%02x%02x%02x%02x",
 		adapter_name, // up to 14 = 32 - 1('\0') - 6*2 - 1('.') - 4('WiC_')
 		(strlen(adapter_name) > 0 ? "." : ""),
@@ -694,7 +696,7 @@ void app_main(void)
 	char uid[33];
 
 	uint8_t derived_mac_addr[6] = {0};
-	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	ESP_ERROR_CHECK(esp_efuse_mac_get_default(derived_mac_addr));
 	sprintf(uid, "%02x%02x%02x%02x%02x%02x",
 			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
 			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);

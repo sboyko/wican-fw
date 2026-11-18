@@ -1835,15 +1835,12 @@ static void fillDeviceInformation(char* buff)
 	const esp_partition_t* running = esp_ota_get_running_partition();
 	esp_app_desc_t running_app_info;
 	if (running && esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
-		offset += sprintf(buff + offset, "fv:%c%c.%c%c,",
-			running_app_info.version[0], running_app_info.version[1],
-			running_app_info.version[2], running_app_info.version[3]
+		offset += sprintf(buff + offset, "fv:%c.%c%c,",
+			running_app_info.version[1], running_app_info.version[2], running_app_info.version[3]
 		);
 
-		offset += sprintf(buff + offset, "hv:%c%c.%c%c_%s{%s},",
-			running_app_info.version[6], running_app_info.version[7],
-			running_app_info.version[8], running_app_info.version[9],
-			(strstr(running_app_info.project_name, "usb") != 0 ? "usb" : "obd"),
+		offset += sprintf(buff + offset, "hv:%c.%c%c{%s},",
+			running_app_info.version[7], running_app_info.version[8], running_app_info.version[9],
 			(esp_flash_encryption_cfg_verify_release_mode() ? "rel" : "dev")
 		);
 	} else {
@@ -1859,11 +1856,16 @@ static void fillDeviceInformation(char* buff)
 	offset += sprintf(buff + offset, "mf:%d,mm:%d,", info.total_free_bytes, info.minimum_free_bytes);
 
 	uint8_t derived_mac_addr[6] = {0};
-	ESP_ERROR_CHECK(esp_read_mac(derived_mac_addr, ESP_MAC_WIFI_SOFTAP));
+	ESP_ERROR_CHECK(esp_efuse_mac_get_default(derived_mac_addr));
 	offset += sprintf(buff + offset, "a:%02x%02x%02x%02x%02x%02x",
 			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
 			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]
 	);
+
+	// WEB Remote Customer (optional)
+	if (strlen(config_server_get_ws_uin()) > 0) {
+		offset += sprintf(buff + offset, ",w:%s", config_server_get_ws_uin());
+	}
 
 	strcat(buff, ")");
 }
@@ -1952,15 +1954,12 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 			else if(!strncmp(cmd_buffer, "stg", 3) || !strncmp(cmd_buffer, "stc", 3))
 			{
 				const bool isExport = (strncmp(cmd_buffer, "stc", 3) == 0);
-				const uint8_t pswExport[7] = { 0x65, 0x32, 0x2d, 0x65, 0x34, 0x21, 0x00 }; // 'e2-e4!'
 
 				const size_t enc_data_len = (cmd_buffer_len - 3) / 2;
 				elm327_fill_data_from_hex_str(cmd_buffer + 3, (uint8_t*)cmd_response, enc_data_len);
 				
 				cmd_buffer[3] = 0; // keep 'stg'/'stc'
-				config_server_processSetting((const uint8_t*)cmd_response, enc_data_len,
-						isExport ? (const char*)pswExport : config_server_get_wic_pass(),
-						cmd_buffer);
+				config_server_processSetting((const uint8_t*)cmd_response, enc_data_len, isExport, cmd_buffer);
 
 				if (strlen(cmd_buffer) > 0) { // so that empty command will not reply
 					strcat(cmd_buffer, "\r>");

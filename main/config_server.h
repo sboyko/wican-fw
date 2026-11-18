@@ -123,7 +123,7 @@ typedef struct _device_config
 	// UART USB baudrate
 	char uart_baud[10];
 
-	// GPS COM setting (format 'baud_parity_dataBits_stopBits' , i.e. '9600_0_8_0')
+	// GPS COM setting (format 'baud_parity_dataBits_stopBits' , i.e. '9600 0 8 0')
 	char gps_sett[15];
 
 	// GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
@@ -227,4 +227,4 @@ const char* config_server_get_gps_sett();
 // GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
 const char* config_server_get_gps_init();
 
-void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, const char* psw, char* const response);
+void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, const bool isExport, char* const response);
