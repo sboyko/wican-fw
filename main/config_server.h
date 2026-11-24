@@ -21,27 +21,13 @@
 
 #pragma once
 
-#define AP_MODE				0
-#define APSTA_MODE			1
-
 #define CAN_NORMAL			0
 #define CAN_SILENT			1
-
-#define UDP_PORT			0
-#define TCP_PORT			1
 
 #define SLCAN				0
 #define REALDASH			1
 #define SAVVYCAN			2
 #define OBD_ELM327			3
-
-// WiCAN HSI (Hardware/Software Interface)
-typedef enum {
-	WIC_HSI_USB = 0x01, // Always set for now
-	WIC_HSI_BLE = 0x02,
-	WIC_HSI_WIFI = 0x04, // WIFI_MODE_AP
-	WIC_HSI_WEB = 0x08,  // WIFI_MODE_STA
-} config_server_wican_iterface_t;
 
 typedef struct _device_config
 {
@@ -70,65 +56,6 @@ typedef struct _device_config
 	char mqtt_tx_topic[64];
 	char mqtt_rx_topic[64];
 	char mqtt_status_topic[64];
-
-	// Master (admin) password, up to 16 characters.
-	char wic_pass[18];
-
-	// Visible adapter name is 'WiC_<wic_name>.<MAC_address>' like 'WiC_MyName.562e5fd68549'
-	// So maximum length of 'wic_name' is:  32 (Wifi SSID / BLE Device Name) - 4('WiC_') - 6*2(MAC) - 1('.') - 1('\0') = 14
-	char wic_name[16];
-
-	// Unsigned integer value (stored as hex string) which corresponds to 'config_server_wican_iterface_t' enumeration.
-	// Note: for now WIC_HSI_USB is always set.
-	char wic_hsi[10];
-
-	// BLE pairing passwords (passkeys or PIN codes) must be exactly 6 numeric digits (000000 to 999999).
-	char ble_pass[8];
-
-	// WiFi password of soft-AP (for modern WPA2 and WPA3 networks must be between 8 and 63 characters).
-	char ap_pass[65];
-
-	// Channel of soft-AP (1..13, 0 - let the driver choose automatically)
-	char ap_ch[3];
-
-	// Protocol ('tcp' / 'udp') of soft-AP 
-	char ap_proto[5];
-
-	// IP address of soft-AP protocol (like '192.168.80.1')
-	char ap_ip[18];
-
-	// Port of soft-AP protocol (0..65535)
-	char ap_port[7];
-
-	// SSID of target-AP (1..32 characters)
-	// Empty value means Abit-specific SSID name is used.
-	char sta_ssid[34];
-
-	// Password of target-AP (8..63 characters)
-	// Empty value means Abit-specific SSID password is used.
-	char sta_pass[65];
-
-	// URL of WebSocket server (up to 230 bytes, like 'ws://212.24.43.2:80' or 'wss://akm02.abit.spb.ru').
-	char ws_addr[232];
-
-	// Remote Customer UIN (up to 16 bytes, like 'agent001').
-	char ws_uin[18];
-
-	// Remote Customer AES (exactly 16 raw bytes).
-	char ws_aes[16];
-
-	// Remote Customer PrK (exactly 32 raw bytes).
-	char ws_prk[32];
-
-	// UART USB baudrate
-	char uart_baud[10];
-
-	// GPS COM setting (format 'baud_parity_dataBits_stopBits' , i.e. '9600 0 8 0')
-	char gps_sett[15];
-
-	// GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
-	char gps_init[232];
-
 } device_config_t;
 
 typedef struct QueueDefinition *QueueHandle_t;
@@ -170,61 +97,6 @@ char *config_server_get_mqtt_tx_topic(void);
 char *config_server_get_mqtt_rx_topic(void);
 char *config_server_get_mqtt_status_topic(void);
 
-// Master password (6..16 characters)
-const char *config_server_get_wic_pass();
+void config_server_graceful_restart(const TickType_t ticksToWait);
 
-// Name of WiCAN adapter (0..14 characters)
-const char *config_server_get_wic_name();
-
-// Bit-field of used HSI (config_server_wican_iterface_t)
-uint32_t config_server_get_wic_hsi();
-
-// BLE standard specifies a 6-digit passkey (0-9) for standard pairing, i.e BLE relies on a strict 6-digit number.
-uint32_t config_server_get_ble_pass();
-
-// Пароль для режима точки доступа (Access Point или soft-AP), в котором ESP32 сам создает собственную Wi-Fi сеть,
-// к которой могут подключаться другие устройства.
-// В этом режиме устройство само назначает IP-адреса подключающимся клиентам (работает встроенный DHCP-сервер).
-// Чип транслирует SSID (имя сети, задаётся в fill_adapter_name()) и этот пароль.
-const char *config_server_get_wifi_ap_pass();
-
-// Channel of soft-AP (integer in between 1..13)
-int8_t config_server_get_wifi_ap_ch();
-
-// Protocol (TCP_PORT / UDP_PORT) of soft-AP 
-int8_t config_server_get_wifi_ap_proto();
-
-// IP address of soft-AP protocol
-const char *config_server_get_wifi_ap_ip();
-
-// Port of soft-AP protocol (0..65535)
-uint16_t config_server_get_wifi_ap_port();
-
-// SSID of target-AP (1..32 characters or empty)
-const char *config_server_get_wifi_sta_ssid();
-
-// Password of target-AP (8..63 characters or empty)
-const char *config_server_get_wifi_sta_pass();
-
-// URL of WebSocket server (up to 230 bytes)
-const char *config_server_get_ws_addr();
-
-// Remote Customer UIN (up to 16 bytes)
-const char *config_server_get_ws_uin();
-
-// Remote Customer AES (exactly 16 raw bytes)
-const uint8_t *config_server_get_ws_aes();
-
-// Remote Customer PrK (exactly 32 raw bytes)
-const uint8_t *config_server_get_ws_prk();
-
-// UART USB baudrate
-uint32_t config_server_get_uart_baud();
-
-// GPS COM setting (format 'baud_parity_dataBits_stopBits')
-const char* config_server_get_gps_sett();
-
-// GPS initialization command (i.e. '$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r')
-const char* config_server_get_gps_init();
-
-void config_server_processSetting(const uint8_t* const ciphered_setting, const size_t setting_length, const bool isExport, char* const response);
+int config_server_get_ws_status();

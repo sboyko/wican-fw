@@ -27,7 +27,7 @@
 #include <driver/gpio.h>
 
 #include "esp_log_wican.h"
-#include "config_server.h"
+#include "wican_settings.h"
 #include "elm327.h"
 #include "wc_uart.h"
 #include "gps_common.h"
@@ -358,7 +358,7 @@ void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHan
 
     gps_serial_init(xuart_tx_queue, &gps_rx_queue, gps_power_gpio);
 
-    usb_uart_config.baud_rate = config_server_get_uart_baud();
+    usb_uart_config.baud_rate = settings_get_int(CFG_UART_BAUD);
 
     setup_uart_usb(UART_NUM_0, &usb_uart_config);
 

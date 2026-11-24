@@ -1,5 +1,4 @@
-#ifndef gps_nmea_h
-#define gps_nmea_h
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -7,10 +6,11 @@
 typedef struct QueueDefinition *QueueHandle_t;
 
 
-// setups reply-to-host callback
+// Setups reply-to-host callback
 void gps_nmea_init(bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q));
 
-// waits for the whole NMEA sentence and delegates it to 'process_nmea_sentence' callback
+// Waits for the whole NMEA sentence and delegates it to 'process_nmea_sentence' callback.
+// NMEA format (ASCII string up to 83 symbols) is like '$TTSSS,data1,data2,...,dataN*CS<CR><LF>'.
 void gps_nmea_read_sentence(
     const uint32_t timeoutMs,
     bool (*process_nmea_sentence)(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q),
@@ -18,14 +18,11 @@ void gps_nmea_read_sentence(
     const bool debugUnknowSentences
 );
 
-// default NMEA sentences processor (currently considers only RMC)
+// Default NMEA sentences processor (currently considers only RMC)
 bool gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q);
 
 // Debug NMEA sentences processor (simply prints all GPS replies)
 bool gps_nmea_debug_process_sentence(const uint8_t* data, const uint16_t dataLength, QueueHandle_t* q);
 
-// sends list of commands (separated by '\r') via UART to GPS
+// Sends list of commands separated by 'Start Delimiter' ('$' or '!') via UART to GPS
 void gps_nmea_send_commands(const char* commands, QueueHandle_t* q);
-
-
-#endif // gps_nmea_h

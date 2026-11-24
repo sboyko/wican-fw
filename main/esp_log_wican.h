@@ -1,5 +1,4 @@
-#ifndef esp_log_wican_h
-#define esp_log_wican_h
+#pragma once
 
 /*
 Disable Application Logs (Compile-Time)
@@ -14,6 +13,21 @@ Disable the Hardware Console Output
 // Note: don't forget to turn off 'configUSE_TRACE_FACILITY' (Enables additional structure members and functions to assist with execution visualization and tracing)
 //  menuconfig -> Component config -> FreeRTOS -> Kernel -> configUSE_TRACE_FACILITY (checkbox)
 
+/**
+ * Для Release-версии нужно:
+ * 
+ * - включить (CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y)
+ *   удаляет текстовые строки сообщений об ошибках из внутренних макросов проверки ошибок ESP-IDF (таких как ESP_RETURN_ON_ERROR, 
+ *   ESP_GOTO_ON_ERROR, ESP_RETURN_ON_FALSE и аналогичных), чтобы уменьшить размер итоговой прошивки во Flash-памяти
+ * 
+ * - отключить (CONFIG_MBEDTLS_ERROR_STRINGS=n)
+ *   отключает текстовые строки ошибок mbedTLS для экономии места
+ * 
+ * - отключить (CONFIG_ESP_ERR_TO_NAME_LOOKUP=n)
+ *   Таблица текстовых имен ошибок занимает заметный объем Flash-памяти (несколько килобайт)
+ * 
+ */
+
 // typedef enum {
 //     ESP_LOG_NONE    = 0,    /*!< No log output */
 //     ESP_LOG_ERROR   = 1,    /*!< Critical errors, software module can not recover on its own */
@@ -24,11 +38,6 @@ Disable the Hardware Console Output
 //     ESP_LOG_MAX     = 6,    /*!< Number of levels supported */
 // } esp_log_level_t;
 #define ESP_LOG_MAIN 0
-
-
-#if ESP_LOG_MAIN == 0
-    #define CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT
-#endif // ESP_LOG_MAIN
 
 #include <esp_check.h> // implies <esp_log.h>
 
@@ -63,4 +72,9 @@ Disable the Hardware Console Output
     #endif // NDEBUG
 #endif // ESP_LOG_MAIN
 
-#endif // esp_log_wican_h
+typedef enum {
+    ERR_ESP_TYPE     = 1, // esp_err_t
+    ERR_MBEDTLS_TYPE = 2, // коды ошибок из mbedTLS (int)
+} wican_log_error_t;
+
+void wican_log_error(char* const buffer, int err_code, const wican_log_error_t err_type);

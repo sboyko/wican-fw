@@ -20,7 +20,6 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/queue.h>
 #include <freertos/event_groups.h>
 #include <esp_wifi.h>
 #include <esp_mac.h>
@@ -28,6 +27,7 @@
 
 #include "esp_log_wican.h"
 #include "config_server.h"
+#include "wican_settings.h"
 #include "ble.h"
 #include "types.h"
 
@@ -89,7 +89,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     	ESP_LOGI(TAG, "WIFI_EVENT_AP_STACONNECTED");
         ESP_LOGI(TAG, "station "MACSTR" join, AID=%d",
                  MAC2STR(((wifi_event_ap_staconnected_t*) event_data)->mac), ((wifi_event_ap_staconnected_t*) event_data)->aid);
-        if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
+        if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE)
         {
 			ble_disable();
 			ESP_LOGW(TAG, "disable ble");
@@ -100,7 +100,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
     	ESP_LOGI(TAG, "WIFI_EVENT_AP_STADISCONNECTED");
         ESP_LOGI(TAG, "station "MACSTR" leave, AID=%d",
                  MAC2STR(((wifi_event_ap_stadisconnected_t*) event_data)->mac), ((wifi_event_ap_stadisconnected_t*) event_data)->aid);
-        if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
+        if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE)
         {
 			ble_enable();
 			ESP_LOGW(TAG, "enable ble");
@@ -114,7 +114,7 @@ static void wifi_network_event_handler(void* arg, esp_event_base_t event_base,
 
 void wifi_network_deinit()
 {
-    if ((config_server_get_wic_hsi() & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
+    if ((settings_get_int(CFG_WIC_HSI) & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
         return;
     }
 
@@ -141,7 +141,7 @@ void wifi_network_deinit()
 
 void wifi_network_restart()
 {
-    const uint32_t wic_hsi = config_server_get_wic_hsi();
+    const uint32_t wic_hsi = settings_get_int(CFG_WIC_HSI);
     if ((wic_hsi & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
         return;
     }
@@ -174,7 +174,7 @@ void wifi_network_restart()
 
 bool wifi_network_is_connected()
 {
-    if ((config_server_get_wic_hsi() & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
+    if ((settings_get_int(CFG_WIC_HSI) & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
         return 0;
     }
 
@@ -215,7 +215,7 @@ static void wifi_conn_task(void *pvParameters)
 
 void wifi_network_init()
 {
-    const uint32_t wic_hsi = config_server_get_wic_hsi();
+    const uint32_t wic_hsi = settings_get_int(CFG_WIC_HSI);
     if ((wic_hsi & (WIC_HSI_WIFI | WIC_HSI_WEB)) == 0) {
         return;
     }
@@ -284,16 +284,26 @@ void wifi_network_init()
             },
         };
 
-        const char* sta_ssid = config_server_get_wifi_sta_ssid();
-        const char* sta_pass = config_server_get_wifi_sta_pass();
+		settings_get_string(CFG_WIFI_STA_SSID, (char*)wifi_config_sta.sta.ssid, sizeof(wifi_config_sta.sta.ssid));
+		settings_get_string(CFG_WIFI_STA_PASS, (char*)wifi_config_sta.sta.password, sizeof(wifi_config_sta.sta.password));
 
-		if (strlen(sta_ssid) == 0 || strlen(sta_pass) == 0) {
-            sta_ssid = "WiCANabitabit";
-            sta_pass = "airabit123";
-        }
+		if (wifi_config_sta.sta.ssid[0] == 0 || wifi_config_sta.sta.password[0] == 0) {
+			// "WiCANabitabit"
+			static const uint8_t rand1[13] = { 0xA3, 0x7F, 0x21, 0xDE, 0x9C, 0x44, 0xB8, 0x06, 0xE5, 0x37, 0xF1, 0x5A, 0xC2 };
+			memcpy(wifi_config_sta.sta.ssid, rand1, sizeof(rand1));
+			const uint8_t key1[13]  = { 0xF4, 0x16, 0x62, 0x9F, 0xD2, 0x25, 0xDA, 0x6F, 0x91, 0x56, 0x93, 0x33, 0xB6 };
+			for (size_t i = 0; i < sizeof(key1); i++) {
+				wifi_config_sta.sta.ssid[i] ^= key1[i];
+			}
 
-       	strcpy( (char*)wifi_config_sta.sta.ssid, sta_ssid);
-       	strcpy( (char*)wifi_config_sta.sta.password, sta_pass);
+			// "airabit123"
+			static const uint8_t rand2[10] = { 0x4D, 0x8E, 0x1B, 0xF3, 0x67, 0xA2, 0x09, 0xC4, 0x55, 0xE8 };
+			memcpy(wifi_config_sta.sta.password, rand2, sizeof(rand2));
+			const uint8_t key2[10] = { 0x2C, 0xE7, 0x69, 0x92, 0x05, 0xCB, 0x7D, 0xF5, 0x67, 0xDB };
+			for (size_t i = 0; i < sizeof(key2); i++) {
+				wifi_config_sta.sta.password[i] ^= key2[i];
+			}
+		}
 
         ESP_ERROR_CHECK(esp_wifi_set_mode((wic_hsi & WIC_HSI_WIFI) == WIC_HSI_WIFI ? WIFI_MODE_APSTA : WIFI_MODE_STA));
     	ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta) );
@@ -305,7 +315,7 @@ void wifi_network_init()
 
     if ((wic_hsi & WIC_HSI_WIFI) == WIC_HSI_WIFI)
     {
-        const int8_t channel = config_server_get_wifi_ap_ch();
+        const int8_t channel = settings_get_int(CFG_WIFI_AP_CH);
         ESP_LOGI(TAG, "AP Channel: %d", channel);
 
         wifi_config_t wifi_config_ap = {
@@ -317,16 +327,21 @@ void wifi_network_init()
         wifi_config_ap.ap.channel = channel;
 
         fill_adapter_name((char *)wifi_config_ap.ap.ssid);
-        strcpy( (char*)wifi_config_ap.ap.password, config_server_get_wifi_ap_pass());
+		ESP_ERROR_CHECK(settings_get_string(CFG_WIFI_AP_PASS, (char*)wifi_config_ap.ap.password, sizeof(wifi_config_ap.ap.password)));
 
     	ESP_ERROR_CHECK(esp_wifi_set_mode((wic_hsi & WIC_HSI_WEB) == WIC_HSI_WEB ? WIFI_MODE_APSTA : WIFI_MODE_AP));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config_ap));
         ESP_ERROR_CHECK(esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20));
 
-        esp_netif_ip_info_t ipInfo;
-        ipInfo.ip.addr = ipaddr_addr(config_server_get_wifi_ap_ip()); // IP4_ADDR(&ipInfo.ip, 192,168,80,1);
-        ipInfo.gw.addr = ipaddr_addr(config_server_get_wifi_ap_ip()); // IP4_ADDR(&ipInfo.gw, 192,168,80,1);
-        ipInfo.netmask.addr = ipaddr_addr("255.255.255.0"); // IP4_ADDR(&ipInfo.netmask, 255,255,255,0);
+        esp_netif_ip_info_t ipInfo = {
+			.netmask = {
+				.addr = ipaddr_addr("255.255.255.0"),
+			},
+		};
+		if (settings_get_string(CFG_WIFI_AP_IP, (char*)wifi_config_ap.ap.password, sizeof(wifi_config_ap.ap.password)) == ESP_OK) {
+			ipInfo.ip.addr = ipaddr_addr((const char*)wifi_config_ap.ap.password);
+			ipInfo.gw.addr = ipaddr_addr((const char*)wifi_config_ap.ap.password);
+		}
         esp_netif_dhcps_stop(ap_netif);
         esp_netif_set_ip_info(ap_netif, &ipInfo);
         esp_netif_dhcps_start(ap_netif);

@@ -25,7 +25,6 @@
 #include "esp_wifi.h"
 #include "esp_system.h"
 #include "esp_event.h"
-#include "nvs_flash.h"
 #include "esp_log_wican.h"
 #include <string.h>
 #include "driver/twai.h"

@@ -30,7 +30,8 @@
 #include "elm327.h"
 #include "types.h"
 #include "gps_common.h"
-#include "config_server.h"
+#include "wican_settings.h"
+#include "wican_commands.h"
 
 #include <ctype.h>
 
@@ -698,14 +699,10 @@ static char* elm327_set_protocol(const char* command_str)
 	}
 	*/
 
-	// restore spaces for sscanf
-	char *p = (char*)&command_str[2];
-	while ((p = strchr(p, '_')) != NULL) {
-		*p = ' ';
-	}
+	// format example: "250000_1_1"
+	int bitrate = 250000, extd = 0, terminalR = 1;
 
-	int bitrate = CAN_250K, extd = 0, terminalR = 1;
-	const int fieldCount = sscanf(&command_str[2], "%d %d %d", &bitrate, &extd, &terminalR); // considers length of 'sp'
+	const int fieldCount = sscanf(&command_str[2], "%d_%d_%d", &bitrate, &extd, &terminalR); // considers length of 'sp'
 	if (fieldCount != 3) {
 		ESP_LOGE(TAG, "malformed SP command: %s", command_str);
 		return (char*)question_mark_str;
@@ -1364,14 +1361,9 @@ static void elm327_kline_send(const char *cmd, const size_t cmd_len, QueueHandle
 
 static void elm327_kline_baud(const char* command_str, QueueHandle_t *q)
 {
-	// restore spaces for sscanf from "BAUD 57600" / "BAUD 10400_0_8_0_1"
-	char *p = (char*)&command_str[4];
-	while ((p = strchr(p, '_')) != NULL) {
-		*p = ' ';
-	}
-
+	// format examples: "BAUD 57600" / "BAUD 10400_0_8_0_1"
 	int parity = 0, dataBits = 8, stopBits = 0, monoline = 1;
-	const int fieldCount = sscanf(&command_str[4], "%d %d %d %d %d", &elm327_config.kline_baud, &parity, &dataBits, &stopBits, &monoline); // considers length of 'baud'
+	const int fieldCount = sscanf(&command_str[4], "%d_%d_%d_%d_%d", &elm327_config.kline_baud, &parity, &dataBits, &stopBits, &monoline); // considers length of 'baud'
 	if (fieldCount == 5) {
 		elm327_config.kline_parity = parity;
 		elm327_config.kline_data_bits = dataBits;
@@ -1404,22 +1396,17 @@ static void elm327_kline_request(const char *cmd, const size_t cmd_len, QueueHan
 
 static void elm327_comm_send(const char *cmd, const size_t cmd_len, QueueHandle_t *q, int (*fnHasNewData)())
 {
-	// restore spaces for sscanf from "data_expectedReplySize_timeoutMs"
-	char *p = (char*)cmd;
-	while ((p = strchr(p, '_')) != NULL) {
-		*p = ' ';
-	}
-
+	// format example: "data_expectedReplySize_timeoutMs"
 	size_t dataSize = 0;
 	int expectedReplySize = 0;
 	int timeoutMs = 0;
 
-	p = (char*)cmd;
-	if ((p = strchr(p, ' ')) != NULL) {
+	char* p = (char*)cmd;
+	if ((p = strchr(p, '_')) != NULL) {
 		*p = '\0';
 		dataSize = (p - cmd) / 2;
 		
-		sscanf(p + 1, "%d %d", &expectedReplySize, &timeoutMs);
+		sscanf(p + 1, "%d_%d", &expectedReplySize, &timeoutMs);
 	} else {
 		dataSize = cmd_len / 2;
 	}
@@ -1532,25 +1519,20 @@ static void elm327_comm_send_async(const char *cmd, const size_t cmd_len, QueueH
 		return;
 	}
 
-	// restore spaces for sscanf from "data_expectedReply_timeoutMs"
-	char *p = (char*)cmd;
-	while ((p = strchr(p, '_')) != NULL) {
-		*p = ' ';
-	}
-
+	// format example: "data_expectedReply_timeoutMs"
 	size_t dataSize = 0;
 	const char *expectedReply = 0;
 	size_t expectedReplySize = 0;
 	int timeoutMs = 0;
 
-	p = (char*)cmd;
-	if ((p = strchr(p, ' ')) != NULL) {
+	char* p = (char*)cmd;
+	if ((p = strchr(p, '_')) != NULL) {
 		*p = '\0';
 		dataSize = (p - cmd) / 2;
 		
 		p += 1;
 		expectedReply = p;
-		if ((p = strchr(p, ' ')) != NULL) {
+		if ((p = strchr(p, '_')) != NULL) {
 			*p = '\0';
 			expectedReplySize = (p - expectedReply) / 2;
 
@@ -1827,7 +1809,7 @@ static char* elm327_set_prgen(const char* command_str)
 
 static void fillDeviceInformation(char* buff)
 {
-	// fills like: WiC_(fv:v3.05,hv:v1.50_usb,mf:65435,mm:24354,a:56fe6c7765e2)
+	// fills like: WiC_(fv:v3.05,hv:v1.50{rel}{nve},mf:65435,mm:24354,a:56fe6c7765e2,w:agent002)
 
 	int offset = 0;
 	offset += sprintf(buff + offset, "WiC_(");
@@ -1839,9 +1821,10 @@ static void fillDeviceInformation(char* buff)
 			running_app_info.version[1], running_app_info.version[2], running_app_info.version[3]
 		);
 
-		offset += sprintf(buff + offset, "hv:%c.%c%c{%s},",
-			running_app_info.version[7], running_app_info.version[8], running_app_info.version[9],
-			(esp_flash_encryption_cfg_verify_release_mode() ? "rel" : "dev")
+		offset += sprintf(buff + offset, "hv:%c.%c%c{%s}{%s},",
+			running_app_info.version[7], running_app_info.version[8], running_app_info.version[9]
+			,(esp_flash_encryption_cfg_verify_release_mode() ? "rel" : "dev")
+			,(settings_enciphered() ? "nve" : "nvn")
 		);
 	} else {
 		offset += sprintf(buff + offset, "fv:__,hv:__,");
@@ -1855,17 +1838,20 @@ static void fillDeviceInformation(char* buff)
 
 	offset += sprintf(buff + offset, "mf:%d,mm:%d,", info.total_free_bytes, info.minimum_free_bytes);
 
-	uint8_t derived_mac_addr[6] = {0};
-	ESP_ERROR_CHECK(esp_efuse_mac_get_default(derived_mac_addr));
+	char* buffer = calloc(1, LEN_WS_UIN);
+	ESP_ERROR_CHECK(esp_efuse_mac_get_default((uint8_t*)buffer));
 	offset += sprintf(buff + offset, "a:%02x%02x%02x%02x%02x%02x",
-			derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-			derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]
+			buffer[0], buffer[1], buffer[2],
+			buffer[3], buffer[4], buffer[5]
 	);
 
 	// WEB Remote Customer (optional)
-	if (strlen(config_server_get_ws_uin()) > 0) {
-		offset += sprintf(buff + offset, ",w:%s", config_server_get_ws_uin());
+	buffer[0] = 0;
+	settings_get_string(CFG_WS_UIN, buffer, LEN_WS_UIN);
+	if (buffer[0] != 0) {
+		offset += sprintf(buff + offset, ",w:%s", buffer);
 	}
+	free(buffer);
 
 	strcat(buff, ")");
 }
@@ -1959,9 +1945,9 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 				elm327_fill_data_from_hex_str(cmd_buffer + 3, (uint8_t*)cmd_response, enc_data_len);
 				
 				cmd_buffer[3] = 0; // keep 'stg'/'stc'
-				config_server_processSetting((const uint8_t*)cmd_response, enc_data_len, isExport, cmd_buffer);
+				wican_commands_process((const uint8_t*)cmd_response, enc_data_len, isExport, cmd_buffer);
 
-				if (strlen(cmd_buffer) > 0) { // so that empty command will not reply
+				if (cmd_buffer[0] != 0) { // so that empty command will not reply
 					strcat(cmd_buffer, "\r>");
 					elm327_response(cmd_buffer, 0, q);
 				}
@@ -1992,7 +1978,7 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 					strcat(cmd_response, (char*)question_mark_str);
 				}
 
-				if (strlen(cmd_response) > 0) { // so that empty command will not reply
+				if (cmd_response[0] != 0) { // so that empty command will not reply
 					strcat(cmd_response, "\r");
 					if (elm327_config.linefeed) {
 						strcat(cmd_response, "\n");

@@ -28,13 +28,14 @@
 #include <esp_http_server.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
-#include "mbedtls/platform_util.h"
+#include <mbedtls/platform_util.h>
 #include <esp_mac.h>
 
 #include "esp_log_wican.h"
 #include "ecc256.h"
 #include "esp_websocket_client.h"
 #include "config_server.h"
+#include "wican_settings.h"
 #include "wifi_network.h"
 #include "can.h"
 #include "ble.h"
@@ -43,7 +44,6 @@
 #include "types.h"
 
 #include "config_server_web.h"
-#include "aes_gcm.h"
 
 #define TAG  __func__
 
@@ -90,24 +90,6 @@ const char device_config_default[] = "{\
 \"mqtt_tx_topic\":\"wican/%s/can/tx\",\
 \"mqtt_rx_topic\":\"wican/%s/can/rx\",\
 \"mqtt_status_topic\":\"wican/%s/can/status\",\
-\"wic_pass\":\"@admin#\",\
-\"wic_name\":\"Abit\",\
-\"wic_hsi\":\"07\",\
-\"ble_pass\":\"239239\",\
-\"ap_pass\":\"239239239\",\
-\"ap_ch\":\"6\",\
-\"ap_proto\":\"tcp\",\
-\"ap_ip\":\"192.168.80.1\",\
-\"ap_port\":\"3333\",\
-\"sta_ssid\":\"\",\
-\"sta_pass\":\"\",\
-\"ws_addr\":\"ws://212.24.43.2:80\",\
-\"ws_uin\":\"\",\
-\"ws_aes\":\"\",\
-\"ws_prk\":\"\",\
-\"uart_baud\":\"460800\",\
-\"gps_sett\":\"9600 0 8 0\",\
-\"gps_init\":\"$PMTK220,1000\\r$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\\r\",\
 \"the_end\":\"22\"\
 }";
 static device_config_t device_config;
@@ -307,7 +289,7 @@ static esp_err_t store_config_handler(httpd_req_t *req)
     const char *resp_str = "Configuration saved! Rebooting...";
     httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
 
-    xTimerStart( xrestartTimer, 0 );
+    config_server_graceful_restart(0);
     return ESP_OK;
 }
 
@@ -511,25 +493,6 @@ static esp_err_t check_status_handler(httpd_req_t *req)
 	cJSON_AddStringToObject(root, "mqtt_rx_topic", device_config.mqtt_rx_topic);
 	cJSON_AddStringToObject(root, "mqtt_status_topic", device_config.mqtt_status_topic);
 
-	//cJSON_AddStringToObject(root, "wic_pass", device_config.wic_pass);
-	cJSON_AddStringToObject(root, "wic_name", device_config.wic_name);
-	cJSON_AddStringToObject(root, "wic_hsi", device_config.wic_hsi);
-	//cJSON_AddStringToObject(root, "ble_pass", device_config.ble_pass);
-	//cJSON_AddStringToObject(root, "ap_pass", device_config.ap_pass);
-	cJSON_AddStringToObject(root, "ap_ch", device_config.ap_ch);
-	cJSON_AddStringToObject(root, "ap_proto", device_config.ap_proto);
-	cJSON_AddStringToObject(root, "ap_ip", device_config.ap_ip);
-	cJSON_AddStringToObject(root, "ap_port", device_config.ap_port);
-	cJSON_AddStringToObject(root, "sta_ssid", device_config.sta_ssid);
-	//cJSON_AddStringToObject(root, "sta_pass", device_config.sta_pass);
-	cJSON_AddStringToObject(root, "ws_addr", device_config.ws_addr);
-	cJSON_AddStringToObject(root, "ws_uin", device_config.ws_uin);
-	//cJSON_AddStringToObject(root, "ws_aes", device_config.ws_aes);
-	//cJSON_AddStringToObject(root, "ws_prk", device_config.ws_prk);
-	cJSON_AddStringToObject(root, "uart_baud", device_config.uart_baud);
-	cJSON_AddStringToObject(root, "gps_sett", device_config.gps_sett);
-	cJSON_AddStringToObject(root, "gps_init", device_config.gps_init);
-
     const char *resp_str = cJSON_Print(root);
 	httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
 
@@ -663,7 +626,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     char filepath[FILE_PATH_MAX];
     uint32_t total_size = 0;
 
-    if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
+    if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE)
     {
     	ble_disable();
     }
@@ -839,7 +802,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    xTimerStart( xrestartTimer, 0 );
+    config_server_graceful_restart(0);
 
     /* Redirect onto root to see the updated file list */
     httpd_resp_set_status(req, "303 See Other");
@@ -1213,151 +1176,6 @@ static void config_server_load_cfg(char *cfg)
 	}
 	strcpy(device_config.mqtt_status_topic, key->valuestring);
 	ESP_LOGI(TAG, "device_config.mqtt_status_topic: %s", device_config.mqtt_status_topic);
-
-
-	//*****
-	key = cJSON_GetObjectItem(root, "wic_pass");
-	if(key == 0 || strlen(key->valuestring) < 6 || strlen(key->valuestring) >= sizeof(device_config.wic_pass)) {
-		goto config_error;
-	}
-	strcpy(device_config.wic_pass, key->valuestring);
-	//ESP_LOGI(TAG, "device_config.wic_pass: %s", device_config.wic_pass);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "wic_name");
-	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.wic_name)) {
-		goto config_error;
-	}
-	strcpy(device_config.wic_name, key->valuestring);
-	ESP_LOGI(TAG, "device_config.wic_name: %s", device_config.wic_name);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "wic_hsi");
-	if(key == 0 || strlen(key->valuestring) < 1 || strlen(key->valuestring) >= sizeof(device_config.wic_hsi)) {
-		goto config_error;
-	}
-	strcpy(device_config.wic_hsi, key->valuestring);
-	ESP_LOGI(TAG, "device_config.wic_hsi: %s", device_config.wic_hsi);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ble_pass");
-	if(key == 0 || strlen(key->valuestring) != 6) {
-		goto config_error;
-	}
-	strcpy(device_config.ble_pass, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ble_pass: %s", device_config.ble_pass);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ap_pass");
-	if(key == 0 || strlen(key->valuestring) < 8 || strlen(key->valuestring) >= sizeof(device_config.ap_pass)) {
-		goto config_error;
-	}
-	strcpy(device_config.ap_pass, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ap_pass: %s", device_config.ap_pass);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ap_ch");
-	if(key == 0 || strlen(key->valuestring) < 1 || strlen(key->valuestring) >= sizeof(device_config.ap_ch)) {
-		goto config_error;
-	}
-	strcpy(device_config.ap_ch, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ap_ch: %s", device_config.ap_ch);
-
-	//*****
-	key = cJSON_GetObjectItem(root,"ap_proto");
-	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.ap_proto)) {
-		goto config_error;
-	}
-	strcpy(device_config.ap_proto, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ap_proto: %s", device_config.ap_proto);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ap_ip");
-	if(key == 0 || strlen(key->valuestring) < 8 || strlen(key->valuestring) >= sizeof(device_config.ap_ip)) {
-		goto config_error;
-	}
-	strcpy(device_config.ap_ip, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ap_ip: %s", device_config.ap_ip);
-
-	//*****
-	key = cJSON_GetObjectItem(root,"ap_port");
-	if(key == 0 || strlen(key->valuestring) < 1 || strlen(key->valuestring) >= sizeof(device_config.ap_port)) {
-		goto config_error;
-	}
-	strcpy(device_config.ap_port, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ap_port: %s", device_config.ap_port);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "sta_ssid");
-	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.sta_ssid)) {
-		goto config_error;
-	}
-	strcpy(device_config.sta_ssid, key->valuestring);
-	ESP_LOGI(TAG, "device_config.sta_ssid: %s", device_config.sta_ssid);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "sta_pass");
-	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.sta_pass)) {
-		goto config_error;
-	}
-	strcpy(device_config.sta_pass, key->valuestring);
-	ESP_LOGI(TAG, "device_config.sta_pass: %s", device_config.sta_pass);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ws_addr");
-	if(key == 0 || strlen(key->valuestring) < 10 || strlen(key->valuestring) >= sizeof(device_config.ws_addr)) {
-		goto config_error;
-	}
-	strcpy(device_config.ws_addr, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ws_addr: %s", device_config.ws_addr);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ws_uin");
-	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.ws_uin)) {
-		goto config_error;
-	}
-	strcpy(device_config.ws_uin, key->valuestring);
-	ESP_LOGI(TAG, "device_config.ws_uin: %s", device_config.ws_uin);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ws_aes");
-	if(key == 0 || strlen(key->valuestring) > sizeof(device_config.ws_aes) * 2) {
-		goto config_error;
-	}
-	elm327_fill_data_from_hex_str(key->valuestring, (uint8_t*)device_config.ws_aes, strlen(key->valuestring) / 2);
-	ESP_LOGI(TAG, "device_config.ws_aes: %s", key->valuestring);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "ws_prk");
-	if(key == 0 || strlen(key->valuestring) > sizeof(device_config.ws_prk) * 2) {
-		goto config_error;
-	}
-	elm327_fill_data_from_hex_str(key->valuestring, (uint8_t*)device_config.ws_prk, strlen(key->valuestring) / 2);
-	ESP_LOGI(TAG, "device_config.ws_prk: %s", key->valuestring);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "uart_baud");
-	if(key == 0 || strlen(key->valuestring) < 2 || strlen(key->valuestring) >= sizeof(device_config.uart_baud)) {
-		goto config_error;
-	}
-	strcpy(device_config.uart_baud, key->valuestring);
-	ESP_LOGI(TAG, "device_config.uart_baud: %s", device_config.uart_baud);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "gps_sett");
-	if(key == 0 || strlen(key->valuestring) < 2 || strlen(key->valuestring) >= sizeof(device_config.gps_sett)) {
-		goto config_error;
-	}
-	strcpy(device_config.gps_sett, key->valuestring);
-	ESP_LOGI(TAG, "device_config.gps_sett: %s", device_config.gps_sett);
-
-	//*****
-	key = cJSON_GetObjectItem(root, "gps_init");
-	if(key == 0 || strlen(key->valuestring) >= sizeof(device_config.gps_init)) {
-		goto config_error;
-	}
-	strcpy(device_config.gps_init, key->valuestring);
-	ESP_LOGI(TAG, "device_config.gps_init: %s", device_config.gps_init);
 
 	//*****
 	key = cJSON_GetObjectItem(root, "the_end");
@@ -1763,13 +1581,20 @@ static void reverse_buff(void* data, int data_len)
 static bool ws_server_authenticate(esp_websocket_client_handle_t client, const char* data, const int data_len)
 {
 	ESP_LOGI(TAG, "Authentication started..");
+
+	static const unsigned int REMOTE_TYPE_CLIENT = 0x200;
+	static const size_t EOL__NUM_ECC_DIGITS = 32; // from ecc256.h
+	static const size_t JWT_SERILIZED_MAX_SIZE = 600;
+
 	unsigned char digest[32];
+	unsigned char signature[EOL__NUM_ECC_DIGITS * 2];
 
 	// initialize JWT fields
 
 	// init 'jwt.customerUin'
-	const char* customerUin = config_server_get_ws_uin();
-	if (strlen(customerUin) == 0) {
+	signature[0] = 0;
+	settings_get_string(CFG_WS_UIN, (char*)signature, sizeof(signature));
+	if (signature[0] == 0) {
 		ESP_LOGE(TAG, "Remote Client data not initialized");
 		return false;
 	}
@@ -1799,14 +1624,10 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 	// init 'jwt.name'
 	fill_adapter_name((char*)digest);
 	
-	static const unsigned int REMOTE_TYPE_CLIENT = 0x200;
-	static const size_t EOL__NUM_ECC_DIGITS = 32; // from ecc256.h
-	static const size_t JWT_SERILIZED_MAX_SIZE = 600;
-
 	char* authBuff = malloc(JWT_SERILIZED_MAX_SIZE);
 
 	int realSize = snprintf(authBuff, JWT_SERILIZED_MAX_SIZE, jwtPayload,
-			customerUin, uid, (int64_t)seconds, digest, nonceEnc, REMOTE_TYPE_CLIENT, timestamp);
+			signature, uid, (int64_t)seconds, digest, nonceEnc, REMOTE_TYPE_CLIENT, timestamp);
 	free(nonceEnc);
 
 	if (realSize <= 0 || realSize >= JWT_SERILIZED_MAX_SIZE) {
@@ -1840,14 +1661,19 @@ static bool ws_server_authenticate(esp_websocket_client_handle_t client, const c
 	}
 	reverse_buff(digest, sizeof(digest));
 
-	unsigned char signature[EOL__NUM_ECC_DIGITS * 2];
-
 	int tries_count = 5;
 	while (--tries_count > 0) {
 		unsigned char random[EOL__NUM_ECC_DIGITS];
 		esp_fill_random(random, sizeof(random));
 
-		if (ecdsa_sign(signature, signature + EOL__NUM_ECC_DIGITS, config_server_get_ws_prk(), random, digest) != 1) {
+		uint8_t* pkey = malloc(LEN_WS_PRK);
+		settings_get_blob(CFG_WS_PRK, pkey);
+
+		const int result = ecdsa_sign(signature, signature + EOL__NUM_ECC_DIGITS, pkey, random, digest);
+		mbedtls_platform_zeroize(pkey, LEN_WS_PRK);
+		free(pkey);
+
+		if (result != 1) {
 			ESP_LOGE(TAG, "ecdsa_sign() fails, repeat");
 		} else {
 			break;
@@ -1946,15 +1772,34 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     }
 }
 
-static void ws_server_task_reset(esp_websocket_client_handle_t client)
+struct ws_server_context {
+	char* ws_addr;
+	esp_websocket_client_config_t* websocket_cfg;
+	esp_websocket_client_handle_t client;
+};
+static const size_t WS_ADDRESS_SIZE = 256;
+
+static void ws_server_task_reset(struct ws_server_context* context)
 {
 	static const TickType_t WEBSOCKET_RECONNECT_TIMEOUT = pdMS_TO_TICKS(5*1000);
 
-	if (client) {
-		const esp_err_t resCode = esp_websocket_client_destroy(client);
+	if (context->ws_addr) {
+		mbedtls_platform_zeroize(context->ws_addr, WS_ADDRESS_SIZE);
+		free(context->ws_addr);
+		context->ws_addr = NULL;
+	}
+
+	if (context->websocket_cfg) {
+		free(context->websocket_cfg);
+		context->websocket_cfg = NULL;
+	}
+
+	if (context->client) {
+		const esp_err_t resCode = esp_websocket_client_destroy(context->client);
 		if (resCode != ESP_OK) {
 			ESP_LOGE(TAG, "esp_websocket_client_destroy() fails = %d", (int) resCode);
 		}
+		context->client = NULL;
 	}
 
 	vTaskDelay(WEBSOCKET_RECONNECT_TIMEOUT);
@@ -1962,7 +1807,7 @@ static void ws_server_task_reset(esp_websocket_client_handle_t client)
 
 static void ws_server_rx_task(void *pvParameters)
 {
-	static char ws_addr[256]; // can go to .bss since task runs forever
+	struct ws_server_context context = {0};
 
 wait_wifi_station:
 	xEventGroupWaitBits(
@@ -1972,51 +1817,68 @@ wait_wifi_station:
 						pdFALSE,       /* Don't wait for both bits, either bit will do. */
 						portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
 
-	ws_addr[0] = 0;
-	strcat(ws_addr, config_server_get_ws_addr());
-	strcat(ws_addr, "/stream/remote");
-	
-	esp_websocket_client_config_t websocket_cfg = {
-		.uri = ws_addr,
-		.keep_alive_enable = true,
-		.keep_alive_idle = 15,
-		.keep_alive_interval = 15,
-		.keep_alive_count = 5,
-	};
+	context.ws_addr = calloc(1, WS_ADDRESS_SIZE);
+	if (context.ws_addr == NULL) {
+		ESP_LOGE(TAG, "Heap allocation error %d bytes", WS_ADDRESS_SIZE);
+		ws_server_task_reset(&context);
+		goto wait_wifi_station;
+	}
 
-	if (strncmp(ws_addr, "wss", 3) == 0) {
-		websocket_cfg.cert_pem = certAbitCA;
-		websocket_cfg.skip_cert_common_name_check = true; // mandatory for 'wss:/'
-		websocket_cfg.buffer_size = 2048; // better to use for 'wss:/'
+	settings_get_string(CFG_WS_ADDR, context.ws_addr, WS_ADDRESS_SIZE);
+	strcat(context.ws_addr, "/stream/remote");
+	
+	context.websocket_cfg = calloc(1, sizeof(esp_websocket_client_config_t));
+	if (context.websocket_cfg == NULL) {
+		ESP_LOGE(TAG, "Heap allocation error %d bytes", sizeof(sizeof(esp_websocket_client_config_t)));
+		ws_server_task_reset(&context);
+		goto wait_wifi_station;
+	}
+
+	context.websocket_cfg->uri = context.ws_addr;
+	context.websocket_cfg->keep_alive_enable = true;
+	context.websocket_cfg->keep_alive_idle = 15;
+	context.websocket_cfg->keep_alive_interval = 15;
+	context.websocket_cfg->keep_alive_count = 5;
+
+	if (strncmp(context.ws_addr, "wss", 3) == 0) {
+		context.websocket_cfg->cert_pem = certAbitCA;
+		context.websocket_cfg->skip_cert_common_name_check = true; // mandatory for 'wss:'
+		context.websocket_cfg->buffer_size = 2048; // better to use for 'wss:'
 	}
 
 	ws_authenticated = false;
 	ws_connected = false;
 
-	ESP_LOGI(TAG, "WebSocket connecting to %s...", websocket_cfg.uri);
+	ESP_LOGI(TAG, "WebSocket connecting to %s...", context.websocket_cfg->uri);
 
-    esp_websocket_client_handle_t client = esp_websocket_client_init(&websocket_cfg);
-    if (client == NULL) {
+	context.client = esp_websocket_client_init(context.websocket_cfg);
+	if (context.client == NULL) {
 		ESP_LOGE(TAG, "esp_websocket_client_init() fails");
-		ws_server_task_reset(client);
+		ws_server_task_reset(&context);
 		goto wait_wifi_station;
 	}
 
-	esp_err_t resCode = esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *)client);
+	mbedtls_platform_zeroize(context.ws_addr, WS_ADDRESS_SIZE);
+	free(context.ws_addr);
+	context.ws_addr = NULL;
+	free(context.websocket_cfg);
+	context.websocket_cfg = NULL;
+
+	esp_err_t resCode = esp_websocket_register_events(context.client, WEBSOCKET_EVENT_ANY, websocket_event_handler, (void *)context.client);
     if (resCode != ESP_OK) {
 		ESP_LOGE(TAG, "esp_websocket_register_events() fails = %d", (int) resCode);
-		ws_server_task_reset(client);
+		ws_server_task_reset(&context);
 		goto wait_wifi_station;
 	}
 
-    resCode = esp_websocket_client_start(client);
+    resCode = esp_websocket_client_start(context.client);
     if (resCode != ESP_OK) {
 		ESP_LOGE(TAG, "esp_websocket_client_start() fails = %d", (int) resCode);
-		ws_server_task_reset(client);
+		ws_server_task_reset(&context);
 		goto wait_wifi_station;
 	}
 
-	ws_client = client;
+	ws_client = context.client;
 
 	while (true) {
 		// esp_websocket_client_is_connected(client)
@@ -2027,17 +1889,17 @@ wait_wifi_station:
 
 			ESP_LOGW(TAG, "WiFi disconnected");
 
-			resCode = esp_websocket_client_close(client, pdMS_TO_TICKS(200));
+			resCode = esp_websocket_client_close(context.client, pdMS_TO_TICKS(200));
 			if (resCode != ESP_OK) {
 				ESP_LOGE(TAG, "esp_websocket_client_close() fails = %d", (int) resCode);
 			}
 
-			ws_server_task_reset(client);
+			ws_server_task_reset(&context);
 			goto wait_wifi_station;
 		}
 	}
 
-	vTaskDelete(NULL);
+	//vTaskDelete(NULL);
 }
 
 bool config_server_ws_connected(void)
@@ -2055,7 +1917,7 @@ void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, c
         config_server_init();
 		server = config_httpd_start();
 
-		if((config_server_get_wic_hsi() & WIC_HSI_WEB) == WIC_HSI_WEB) {
+		if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_WEB) == WIC_HSI_WEB) {
 			xTaskCreate(ws_tx_task, "ws_tx_task", 1024*4, NULL, 5, &ws_tx_task_handle);
 			xTaskCreate(ws_server_rx_task, "ws_server_rx_task", 1024*3, NULL, 5, NULL);
 		}
@@ -2209,7 +2071,7 @@ int8_t config_server_get_alert_volt(float *alert_volt)
 
 int8_t config_server_mqtt_en_config(void)
 {
-	if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
+	if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE)
 	{
 		return 0;
 	}
@@ -2301,559 +2163,44 @@ void config_server_set_ble_config(uint8_t b)
 		fprintf(f, resp_str);
 		fclose(f);
 	}
-	xTimerStart( xrestartTimer, 0 );
+	config_server_graceful_restart(0);
 }
 
-/*
-* API
-*/
-const char *config_server_get_wic_pass()
+void config_server_graceful_restart(const TickType_t ticksToWait)
 {
-	return device_config.wic_pass;
+	xTimerStart( xrestartTimer, ticksToWait );
 }
 
-/*
-* API
-*/
-const char *config_server_get_wic_name()
+int config_server_get_ws_status()
 {
-	return device_config.wic_name;
-}
-
-/*
-* API
-*/
-uint32_t config_server_get_wic_hsi()
-{
-	return strtoul(device_config.wic_hsi, NULL, 16);
-}
-
-/*
-* API
-*/
-uint32_t config_server_get_ble_pass()
-{
-	return strtoul(device_config.ble_pass, NULL, 10);
-}
-
-/*
-* API
-*/
-const char *config_server_get_wifi_ap_pass()
-{
-	return device_config.ap_pass;
-}
-
-/*
-* API
-*/
-int8_t config_server_get_wifi_ap_ch()
-{
-	return strtoul(device_config.ap_ch, NULL, 10);
-}
-
-/*
-* API
-*/
-int8_t config_server_get_wifi_ap_proto()
-{
-	if(strcmp(device_config.ap_proto, "udp") == 0) {
-		return UDP_PORT;
-	}
-	return TCP_PORT;
-}
-
-/*
-* API
-*/
-const char *config_server_get_wifi_ap_ip()
-{
-	return device_config.ap_ip;
-}
-
-/*
-* API
-*/
-uint16_t config_server_get_wifi_ap_port()
-{
-	return (uint16_t)strtoul(device_config.ap_port, NULL, 10);
-}
-
-/*
-* API
-*/
-const char *config_server_get_wifi_sta_ssid()
-{
-	return device_config.sta_ssid;
-}
-
-/*
-* API
-*/
-const char *config_server_get_wifi_sta_pass()
-{
-	return device_config.sta_pass;
-}
-
-/*
-* API
-*/
-const char *config_server_get_ws_addr()
-{
-	return device_config.ws_addr;
-}
-
-/*
-* API
-*/
-const char *config_server_get_ws_uin()
-{
-	return device_config.ws_uin;
-}
-
-/*
-* API
-*/
-const uint8_t *config_server_get_ws_aes()
-{
-	return (uint8_t*)device_config.ws_aes;
-}
-
-/*
-* API
-*/
-const uint8_t *config_server_get_ws_prk()
-{
-	return (uint8_t*)device_config.ws_prk;
-}
-
-/*
-* API
-*/
-uint32_t config_server_get_uart_baud()
-{
-	return strtoul(device_config.uart_baud, NULL, 10);
-}
-
-/*
-* API
-*/
-const char *config_server_get_gps_sett()
-{
-	return device_config.gps_sett;
-}
-
-/*
-* API
-*/
-const char *config_server_get_gps_init()
-{
-	return device_config.gps_init;
-}
-
-/*
-* impl
-*/
-static int getConfigString(const char* name, char* data, const size_t data_len)
-{
-	cJSON* root = cJSON_Parse(device_config_file);
-	if (root == NULL) {
-		return ESP_FAIL;
+	if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_WEB) != WIC_HSI_WEB) {
+		return -1; // WEB Interface not active
 	}
 	
-	cJSON* item = cJSON_GetObjectItem(root, name);
-
-	int result = ESP_FAIL;
-	if (item != NULL && strlen(item->valuestring) < data_len) {
-		strcpy(data, item->valuestring);
-		result = strlen(item->valuestring);
+	if (!config_server_get_wifi_connected()) {
+		return -2; // WiFi Station not connected
 	}
-
-	cJSON_Delete(root);
-
-	return result;
-}
-
-/*
-* impl
-*/
-struct NameValuePair {
-	const char* name;
-	const char* value;
-};
-static bool setConfigString(const struct NameValuePair* pairs, const size_t pairsCount)
-{
-	cJSON* root = cJSON_Parse(device_config_file);
-	if (root == NULL) {
-		return false;
-	}
-
-	for (size_t i = 0; i < pairsCount; ++i) {
-		cJSON* item = cJSON_GetObjectItem(root, pairs[i].name);
-		if (item == NULL) {
-			cJSON_Delete(root);
-			return false;
-		}
-		char* result = cJSON_SetValuestring(item, pairs[i].value);
-		if (result == NULL) {
-			cJSON_Delete(root);
-			return false;
-		}
-	}
-
-	char* resp_str = cJSON_Print(root);
-	if (resp_str == NULL) {
-		cJSON_Delete(root);
-		return false;
-	}
-	cJSON_Delete(root);
-
-	FILE* f = fopen("/spiffs/config.json", "w");
-	if (f == NULL) {
-		cJSON_free(resp_str);
-		return false;
-	}
-
-	fprintf(f, resp_str);
-	fclose(f);
 	
-	cJSON_free(device_config_file);
-	device_config_file = resp_str;
-
-	return true;
-}
-
-static const esp_partition_t* ota_update_partition = NULL;
-static esp_ota_handle_t ota_update_handle = 0; // set by esp_ota_begin(), must be freed via esp_ota_end()
-
-/*
-* First part of OTA process (Start-upload-finish)
-*/
-static int startOta(const size_t image_size, char* const response)
-{
-	if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
-		ble_disable();
+	if (!ws_client) {
+		return -3; // WS Session not started (internal error)
 	}
 
-	if ((config_server_get_wic_hsi() & (WIC_HSI_WIFI | WIC_HSI_WEB)) != 0) {
-		config_server_stop();
-		//wifi_network_deinit();
+	char* ws_uin = calloc(1, LEN_WS_UIN);
+	settings_get_string(CFG_WS_UIN, ws_uin, LEN_WS_UIN);
+	const bool initialized = (ws_uin[0] != 0);
+	free(ws_uin);
+
+	if (!initialized) {
+		return -4; // WS Client data not initialized
+	}
+	
+	if (!ws_connected) {
+		return -5; // WS Client not connected to Server
+	}
+	
+	if (!ws_authenticated) {
+		return -6; // WS Client not authenticated on Server
 	}
 
-	can_disable();
-
-	ESP_LOGI(TAG, "Starting OTA");
-
-	const esp_partition_t *configured = esp_ota_get_boot_partition();
-	const esp_partition_t *running = esp_ota_get_running_partition();
-
-	if (configured != NULL && running != NULL) {
-		if (configured != running) {
-			ESP_LOGW(TAG, "Configured OTA boot partition at offset 0x%08lx, but running from offset 0x%08lx",
-					configured->address, running->address);
-			ESP_LOGW(TAG, "(This can happen if either the OTA boot data or preferred boot image become corrupted somehow.)");
-		}
-		ESP_LOGI(TAG, "Running partition type %d subtype %d (offset 0x%08lx)",
-				running->type, running->subtype, running->address);
-	}
-
-	ota_update_partition = esp_ota_get_next_update_partition(NULL);
-	if (ota_update_partition == NULL) {
-		strcat(response, "ota_no_app_slot");
-		return ESP_FAIL;
-	}
-	ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx",
-				ota_update_partition->subtype, ota_update_partition->address);
-
-	esp_err_t err = esp_ota_begin(ota_update_partition, image_size, &ota_update_handle);
-	if (err != ESP_OK) {
-		strcat(response, "ota_begin_failed_");
-		strcat(response, esp_err_to_name(err));
-
-		ota_update_partition = NULL;
-		return ESP_FAIL;
-	}
-
-	strcpy(response, "OK"); // same to 'ok_str'
-	return 1000; // indicates plain text
-}
-
-/*
-* Second (repeated) part of OTA process (start-Upload-finish)
-*/
-static int uploadOta(const uint8_t* data, const size_t data_size, char* const response)
-{
-	if (ota_update_partition == NULL) {
-		strcat(response, "ota_no_app_slot");
-		return ESP_FAIL;
-	}
-
-	esp_err_t err = esp_ota_write(ota_update_handle, data, data_size);
-	if (err != ESP_OK) {
-		strcat(response, "ota_write_failed_");
-		strcat(response, esp_err_to_name(err));
-
-		esp_ota_abort(ota_update_handle);
-		ota_update_partition = NULL;
-		return ESP_FAIL;
-	}
-
-	//vTaskDelay(1);
-
-	strcpy(response, "OK"); // same to 'ok_str'
-	return 1000; // indicates plain text
-}
-
-/*
-* Final part of OTA process (start-upload-Finish)
-* Note that device restart is scheduled
-*/
-static int finishOta(char* const response)
-{
-	if (ota_update_partition == NULL) {
-		strcat(response, "ota_no_app_slot");
-		return ESP_FAIL;
-	}
-
-	esp_err_t err = esp_ota_end(ota_update_handle);
-	if (err != ESP_OK) {
-		if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
-			strcat(response, "image_is_corrupted");
-		} else {
-			strcat(response, "ota_end_failed_");
-			strcat(response, esp_err_to_name(err));
-		}
-
-		ota_update_partition = NULL;
-		return ESP_FAIL;
-	}
-
-	err = esp_ota_set_boot_partition(ota_update_partition);
-	if (err != ESP_OK) {
-		strcat(response, "ota_set_boot_failed_");
-		strcat(response, esp_err_to_name(err));
-
-		ota_update_partition = NULL;
-		return ESP_FAIL;
-	}
-
-	xTimerStart(xrestartTimer, 10);
-
-	strcpy(response, "OK"); // same to 'ok_str'
-	return 1000; // indicates plain text
-}
-
-/*
-* Handler for WiCAN commands.
-*/
-static const uint16_t CMD_PING = 10;
-static const uint16_t CMD_RESTART = 11;
-
-static const uint16_t CMD_GET_SETTING = 12;
-static const uint16_t CMD_SET_SETTING = 13;
-
-static const uint16_t CMD_WEB_STATUS = 20;
-static const uint16_t CMD_WEB_SET_CUSTOMER = 21;
-
-static const uint16_t CMD_OTA_START = 30;
-static const uint16_t CMD_OTA_UPLOAD = 31;
-static const uint16_t CMD_OTA_FINISH = 32;
-
-static int dispatchSetting(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
-{
-	switch (command) {
-
-	case CMD_PING: {
-		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text
-	}
-
-	case CMD_RESTART: {
-		xTimerStart(xrestartTimer, 10);
-
-		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text
-	}
-
-	case CMD_GET_SETTING: {
-		const char* setting_name = (const char*)data;
-
-		const int result_len = getConfigString(setting_name, response, response_len);
-		if (result_len < 0) {
-			strcat(response, "failed_fetch_");
-			strcat(response, setting_name);
-			return ESP_FAIL;
-		}
-
-		return result_len;
-	}
-
-	case CMD_SET_SETTING: {
-		const char* setting_name = (const char*)data;
-		const char* setting_value = strchr(setting_name, '\0') + 1;
-
-		struct NameValuePair pairs[1] = { {.name = setting_name, .value = setting_value} };
-		if (!setConfigString(pairs, 1)) {
-			strcat(response, "failed_save_");
-			strcat(response, setting_name);
-			return ESP_FAIL;
-		}
-
-		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text
-	}
-
-	case CMD_WEB_STATUS: {
-		int status = 1; // online
-
-		if((config_server_get_wic_hsi() & WIC_HSI_WEB) != WIC_HSI_WEB) {
-			status = -1; // WEB Interface not active
-		} else if (!config_server_get_wifi_connected()) {
-			status = -2; // WiFi Station not connected
-		} else if (!ws_client) {
-			status = -3; // WS Session not started (internal error)
-		} else if (strlen(config_server_get_ws_uin()) == 0) {
-			status = -4; // WS Client data not initialized
-		} else if (!ws_connected) {
-			status = -5; // WS Client not connected to Server
-		} else if (!ws_authenticated) {
-			status = -6; // WS Client not authenticated on Server
-		}
-
-		return sprintf(response, "%d", status);
-	}
-
-	case CMD_WEB_SET_CUSTOMER: { // WiCAN initialization data (Customer UIN (16), Customer AES (16), Customer PrK (32))
-		if (data_len != 16 + 16 + 32) {
-			strcat(response, "malformed_command_data");
-			return ESP_FAIL;
-		}
-
-		char customerUin[16 + 1] = {0};
-		memcpy(customerUin, data, 16);
-
-		char customerAes[16*2 + 1] = {0};
-		for (int i = 0; i < 16; i++) {
-			sprintf(customerAes + i*2, "%02X", data[16 + i]);
-		}
-
-		char customerPrk[32*2 + 1] = {0};
-		for (int i = 0; i < 32; i++) {
-			sprintf(customerPrk + i*2, "%02X", data[32 + i]);
-		}
-
-		struct NameValuePair pairs[3] = {
-			{.name = "ws_uin", .value = customerUin},
-			{.name = "ws_aes", .value = customerAes},
-			{.name = "ws_prk", .value = customerPrk},
-		};
-		if (!setConfigString(pairs, 3)) {
-			strcat(response, "failed_save_web_init");
-			return ESP_FAIL;
-		}
-
-		xTimerStart(xrestartTimer, 10);
-
-		strcpy(response, "OK"); // same to 'ok_str'
-		return 1000; // indicates plain text
-	}
-
-	case CMD_OTA_START: {
-		uint32_t image_size = 0;
-		if (data_len >= sizeof(image_size)) {
-			memcpy(&image_size, data, sizeof(image_size));
-		}
-		return startOta(image_size, response);
-	}
-
-	case CMD_OTA_UPLOAD: {
-		return uploadOta(data, data_len, response);
-	}
-
-	case CMD_OTA_FINISH: {
-		return finishOta(response);
-	}
-
-	default: {
-		strcat(response, "unknown_command");
-		return ESP_FAIL;
-	}
-
-	}
-}
-
-/*
-* API
-*/
-void config_server_processSetting(const uint8_t* const cipherdata, const size_t cipherdata_len, const bool isExport, char* const response)
-{
-	static uint16_t g_command_counter = 0;
-
-	if (!aes_gcm_init(cipherdata, cipherdata_len, isExport, response)) {
-		if (strlen(response) > 0) {
-			strcat(response, "CANERROR");
-		}
-		g_command_counter = 0;
-		return;
-	}
-
-	static const size_t CMD_PDU_MAX_SIZE = 233;
-	uint8_t* data = malloc(CMD_PDU_MAX_SIZE);
-	char* outdata = malloc(CMD_PDU_MAX_SIZE);
-	bool processed = false;
-
-	while (true) {
-		const int data_len = aes_gcm_decrypt(cipherdata, cipherdata_len, data, response);
-		if (data_len < 0) {
-			break;
-		}
-
-		// PDU Payload = cmd(2) + cmd_counter(2) + data(up to 228)
-		if (data_len < 4) {
-			strcat(response, "malformed_pdu_data");
-			break;
-		}
-		const uint16_t cmd = (data[0] + (data[1] << 8));
-		const uint16_t cmd_counter = (data[2] + (data[3] << 8));
-
-		if (cmd_counter != g_command_counter) {
-			strcat(response, "invalid_session");
-			break;
-		}
-
-		outdata[0] = 0;
-		const int reply_len = dispatchSetting(cmd, data + 4, data_len - 4, outdata, CMD_PDU_MAX_SIZE - 1);
-
-		if (reply_len < 0) { // error text
-			strcat(response, outdata);
-		} else if (reply_len > 230) { // plain text
-			strcpy(response, outdata);
-			processed = true;
-		} else { // reply for enciphering
-			const int result_len = aes_gcm_encrypt((const uint8_t*)outdata, reply_len, data, response);
-			if (result_len < 0) {
-				strcat(response, "aes_gcm_encrypt_failed");
-				break;
-			}
-
-			int offset = strlen(response);
-			for (int i = 0; i < result_len; i++) {
-				offset += sprintf(response + offset, "%02X", data[i]);
-			}
-			processed = true;
-		}
-
-		break;
-	}
-
-	mbedtls_platform_zeroize(data, CMD_PDU_MAX_SIZE);
-	free(data);
-	mbedtls_platform_zeroize(outdata, CMD_PDU_MAX_SIZE);
-	free(outdata);
-
-	if (processed) {
-		g_command_counter += 1;
-	} else {
-		strcat(response, "CANERROR");
-	}
+	return 1; // online
 }

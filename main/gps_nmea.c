@@ -10,13 +10,17 @@
 #include "gps_common.h"
 #include "gps_nmea.h"
 #include "types.h"
-#include "config_server.h"
+#include "wican_settings.h"
 
 #include <ctype.h>
 #include <string.h>
 
 
-const char* const GPS_REPLY_HEADER = "gps";
+static const char NMEA_START_DELIM1 = '$';
+static const char NMEA_START_DELIM2 = '!';
+static const char NMEA_CHECKSUM_DELIM = '*';
+
+static const char* const GPS_REPLY_HEADER = "gps";
 
 bool (*nmea_response)(const char*, uint32_t, QueueHandle_t *q) = NULL;
 
@@ -29,6 +33,12 @@ typedef struct
 	double m_longitude; // decimal representation (ddd.dddddddd), sign = (W: '-', E: '+')
 	double m_speed; // in km/h
 } Nmea_RMC;
+
+// local
+static bool _is_start_delim(const char ch)
+{
+	return ch == NMEA_START_DELIM1 || ch == NMEA_START_DELIM2;
+}
 
 // local
 static bool _process_nmea_RMC(const uint8_t* data, const uint16_t dataLength, Nmea_RMC* msgData)
@@ -123,7 +133,7 @@ static void _calc_checksum(const char* str, const uint16_t strLength, char check
 		cs ^= str[i];
 	}
 
-	checksum[0] = '*';
+	checksum[0] = NMEA_CHECKSUM_DELIM;
 	checksum[1] = (cs / 16) + '0'; // 1 байт контрольной суммы
 	if (checksum[1] > '9') {
 		checksum[1] += 7;
@@ -177,7 +187,7 @@ void gps_nmea_read_sentence(
 				endFound = true;
 				break;
 			} else if (nextByte >= 0x20 && nextByte <= 0x7E) { // Все символы тела сообщения должны быть из диапазона печатных ASCII-символов
-				if (nextByte == '*') { // checksum delimiter
+				if (nextByte == NMEA_CHECKSUM_DELIM) { // checksum delimiter
 					checksumPos = sentencePos;
 				}
 				nmeaSentence[sentencePos] = nextByte;
@@ -189,7 +199,7 @@ void gps_nmea_read_sentence(
 			} else {
 				// simply skip
 			}
-		} else if (nextByte == '$' || nextByte == '!') { // starting delimeters are only '$' or '!'
+		} else if (_is_start_delim(nextByte)) { // starting delimeters
 			startFound = true;
 		} else {
 			// simply skip
@@ -287,7 +297,13 @@ bool gps_nmea_process_sentence(const uint8_t* data, const uint16_t dataLength, Q
 	if (toupper(data[0]) == 'P' && toupper(data[1]) == 'M' && toupper(data[2]) == 'T' && toupper(data[3]) == 'K') {
 		if (dataLength >= 14 && memcmp(data + 8, "MTKGPS", 6) == 0) {
 			gps_nmea_debug_process_sentence(data, dataLength, q);
-			gps_nmea_send_commands(config_server_get_gps_init(), q);
+
+			char* gps_init = calloc(1, LEN_GPS_INIT);
+			settings_get_string(CFG_GPS_INIT, gps_init, LEN_GPS_INIT);
+			if (gps_init[0] != 0) {
+				gps_nmea_send_commands(gps_init, q);
+			}
+			free(gps_init);
 			return true;
 		}
 	}
@@ -300,11 +316,12 @@ void gps_nmea_send_commands(const char* commands, QueueHandle_t* q)
 {
 	bool fails = false;
 
-	for (uint16_t i = 0, in = (uint16_t)strlen(commands); i < in; ) {
+	// first symbol (that is commands[0]) should be of NMEA_START_DELIM
+	for (uint16_t i = 1, in = (uint16_t)strlen(commands); i < in; ) {
 		uint16_t endPos = i;
 		uint16_t asteriskPos = 0;
-		for (; endPos < in && commands[endPos] != '\r'; ++endPos) {
-			if (commands[endPos] == '*') {
+		for (; endPos < in && !_is_start_delim(commands[endPos]); ++endPos) {
+			if (commands[endPos] == NMEA_CHECKSUM_DELIM) {
 				asteriskPos = endPos;
 			}
 		}
@@ -319,7 +336,8 @@ void gps_nmea_send_commands(const char* commands, QueueHandle_t* q)
 				} else {
 					if (q) {
 						nmea_response(GPS_REPLY_HEADER, 0, q);
-						nmea_response(&commands[i], endPos - i + 1, q); // including separator ('\r')
+						nmea_response(&commands[i], endPos - i, q);
+						nmea_response("\r", 0, q);
 					}
 				}
 			}

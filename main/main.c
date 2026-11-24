@@ -21,7 +21,6 @@
 #include <driver/twai.h>
 #include <esp_mac.h>
 #include <esp_ota_ops.h>
-#include <nvs_flash.h>
 #include <esp_wifi.h>
 #include <esp_timer.h>
 
@@ -32,6 +31,7 @@
 #include "types.h"
 #include "comm_server.h"
 #include "config_server.h"
+#include "wican_settings.h"
 #include "realdash.h"
 #include "slcan.h"
 #include "can.h"
@@ -213,7 +213,7 @@ static bool setHostTxQueue(QueueHandle_t* const queue)
 		xQueueReset(*old_txQueue);
 	}
 
-	if ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE) {
+	if ((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE) {
 		// Impotant: when BLE is on then USB sometimes fail under heavy load
 		if (old_txQueue != queue) {
 			if (old_txQueue == &xmsg_uart_tx_queue && queue == NULL) {
@@ -414,8 +414,8 @@ static void nmea_rx_task(void *pvParameters)
 	// $PCAS10,0  // gps_reset(0) (0 - HOT_START, 1 - WARM_START, 2 - COLD_START, 3 - FACTORY_SET)
 	/*
 	char gps_init_commands[] = "\
-$PCAS02,1000\r\
-$PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
+$PCAS02,1000\
+$PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\
 ";
 	*/
 
@@ -424,10 +424,12 @@ $PCAS03,0,0,0,0,1,0,0,0,0,0,0,,0,0\r\
 	// $PMTK314,1,1,1,1,1,5,0,0,0,0,0,0,0,0,0,0,0,1,0 -  totally 19 data fields that present output frequencies for the 19 supported NMEA sentences individually (Packet Type: 314 PMTK_API_SET_NMEA_OUTPUT)
 	/*
 	char gps_init_commands[] = "\
-$PMTK220,1000\r\
-$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
+$PMTK220,1000\
+$PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\
 ";
 	*/
+
+	static char gps_setting[LEN_GPS_INIT]; // can go to .bss since task runs forever
 
 	int gps_baud = 9600;
 	int gps_parity = 0;
@@ -435,8 +437,10 @@ $PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
 	int gps_stopBits = 0;
 
 	// load GPS COM settings (i.e. '9600_0_8_0')
-	if (sscanf(config_server_get_gps_sett(), "%d %d %d %d", &gps_baud, &gps_parity, &gps_dataBits, &gps_stopBits) != 4) {
-		ESP_LOGE(TAG, "Unexpected fields count in: %s", config_server_get_gps_sett());
+	if (settings_get_string(CFG_GPS_SETT, gps_setting, sizeof(gps_setting)) == ESP_OK) {
+		if (sscanf(gps_setting, "%d_%d_%d_%d", &gps_baud, &gps_parity, &gps_dataBits, &gps_stopBits) != 4) {
+			ESP_LOGE(TAG, "Unexpected fields count in: %s", gps_setting);
+		}
 	}
 
 	xdev_buffer waste_buffer;
@@ -463,7 +467,9 @@ $PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\r\
 			if (!wc_gps_set_baudrate(gps_baud, gps_parity, gps_dataBits, gps_stopBits)) {
 				continue;
 			}
-			gps_nmea_send_commands(config_server_get_gps_init(), txQueue);
+			if (settings_get_string(CFG_GPS_INIT, gps_setting, sizeof(gps_setting)) == ESP_OK) {
+				gps_nmea_send_commands(gps_setting, txQueue);
+			}
 		}
 
 		wc_gps_update(true);
@@ -589,15 +595,21 @@ void notify_connection_closed(const dev_channel_t channel)
 // API (declared in types.h)
 void fill_adapter_name(char* name)
 {
-	const char* adapter_name = config_server_get_wic_name();
+	// Expecting 'name' is at least 32 bytes: 4('WiC_') + wic_name(up to 14) + 1('.') + 6*2(MAC) + 1('\0') = 32
+
+	sprintf(name, "WiC_");
+	settings_get_string(CFG_WIC_NAME, name + strlen(name), LEN_WIC_NAME);
+	if (strlen(name) > 4) {
+		strcat(name, ".");
+	}
 
 	uint8_t derived_mac_addr[6] = {0};
 	ESP_ERROR_CHECK(esp_efuse_mac_get_default(derived_mac_addr));
-	snprintf(name, 32, "WiC_%s%s%02x%02x%02x%02x%02x%02x",
-		adapter_name, // up to 14 = 32 - 1('\0') - 6*2 - 1('.') - 4('WiC_')
-		(strlen(adapter_name) > 0 ? "." : ""),
-		derived_mac_addr[0], derived_mac_addr[1], derived_mac_addr[2],
-		derived_mac_addr[3], derived_mac_addr[4], derived_mac_addr[5]);
+
+	int offset = strlen(name);
+	for (int i = 0; i < 6; ++i) {
+		offset += sprintf(name + offset, "%02x", derived_mac_addr[i]);
+	}
 }
 
 // API (declared in types.h)
@@ -650,7 +662,7 @@ static char* ensurePrintable(char* str, const int maxLength)
 
 void app_main(void)
 {
-	ESP_ERROR_CHECK(nvs_flash_init());
+	ESP_ERROR_CHECK(settings_init());
 	ESP_ERROR_CHECK(esp_netif_init());
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -795,18 +807,18 @@ void app_main(void)
 
 	wifi_network_init();
 
-	if((config_server_get_wic_hsi() & WIC_HSI_WIFI) == WIC_HSI_WIFI)
+	if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_WIFI) == WIC_HSI_WIFI)
 	{
-		tcp_server_init(config_server_get_wifi_ap_port(), &xMsg_Tx_Queue, &xMsg_Rx_Queue,
-			config_server_get_wifi_ap_proto() == UDP_PORT ? 1 : 0);
+		tcp_server_init(settings_get_int(CFG_WIFI_AP_PORT), &xMsg_Tx_Queue, &xMsg_Rx_Queue,
+			settings_get_int(CFG_WIFI_AP_PROTO));
 	}
 
-	if((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE)
+	if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE)
 	{
 		char ble_uid[32]; // sync with wifi_ap_config_t.ssid[32] from 'esp_wifi_types_generic.h'
 		fill_adapter_name(ble_uid);
 
-		uint32_t pass = config_server_get_ble_pass();
+		uint32_t pass = settings_get_int(CFG_BLE_PASS);
 		xmsg_ble_tx_queue = xQueueCreate(64, sizeof( xdev_buffer) ); // BLE TX queue
 		ble_init(&xmsg_ble_tx_queue, &xMsg_Rx_Queue, pass, ble_uid);
 	}

@@ -32,6 +32,7 @@
 #include "types.h"
 #include "ble.h"
 #include "config_server.h"
+#include "wican_settings.h"
 #include "wifi_network.h"
 #include "elm327.h"
 
@@ -557,7 +558,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 				esp_gatt_rsp_t rsp = {0};
             	rsp.attr_value.handle = param->read.handle;
             	rsp.attr_value.len = 1;
-            	rsp.attr_value.value[0] = ((config_server_get_wic_hsi() & WIC_HSI_BLE) == WIC_HSI_BLE);
+            	rsp.attr_value.value[0] = ((settings_get_int(CFG_WIC_HSI) & WIC_HSI_BLE) == WIC_HSI_BLE);
 				const esp_err_t result = esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, param->reg.status, &rsp);
 				if (result != ESP_OK) {
 					ESP_LOGE(TAG, "esp_ble_gatts_send_response(status) fails: %d", result);
