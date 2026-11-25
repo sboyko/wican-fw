@@ -1766,7 +1766,7 @@ static char* elm327_perm_reset(const char* command_str)
 	return ""; // skip reply
 }
 
-static char* elm327_uds_response_skip(const char* command_str)
+static char* elm327_uds_response_set(const char* command_str)
 {
 	size_t data_size = MIN(strlen(command_str + 4) / 2, 8); // considers length of 'rsps'
 	elm327_fill_data_from_hex_str(command_str + 4, elm327_config.uds_rps_skip_prefix, data_size);
@@ -1779,7 +1779,7 @@ static char* elm327_uds_response_skip(const char* command_str)
 	return (char*)ok_str;
 }
 
-static char* elm327_uds_response_all(const char* command_str)
+static char* elm327_uds_response_clear(const char* command_str)
 {
 	close_skip_mode();
 
@@ -1861,8 +1861,8 @@ const xelm327_cmd_t elm327_commands[] = {
 											{"spc", elm327_special_send},//special send (Abit specific - should be the first in the list)
 											{"prs", elm327_perm_send},//send permanent command (Abit specific - should be the first in the list)
 											{"prr", elm327_perm_reset},//reset permanent commands (Abit specific - should be the first in the list)
-											{"rsps", elm327_uds_response_skip},//setup UDS response filtering (Abit specific - should be the first in the list)
-											{"rspa", elm327_uds_response_all},//reset UDS response filtering (Abit specific - should be the first in the list)
+											{"rsps", elm327_uds_response_set},//setup UDS response filtering (Abit specific - should be the first in the list)
+											{"rspa", elm327_uds_response_clear},//reset UDS response filtering (Abit specific - should be the first in the list)
 											{"ping", elm327_ping},//client sends ping to tell that it's still on the line (Abit specific - should be the first in the list)
 											{"prgen", elm327_set_prgen},//PRGEN ('on'/'off') for ECU programming (DTR pin on COM)
 
@@ -1945,7 +1945,7 @@ void elm327_process_cmd(const uint8_t *buf, const uint8_t len, QueueHandle_t *q,
 				elm327_fill_data_from_hex_str(cmd_buffer + 3, (uint8_t*)cmd_response, enc_data_len);
 				
 				cmd_buffer[3] = 0; // keep 'stg'/'stc'
-				wican_commands_process((const uint8_t*)cmd_response, enc_data_len, isExport, cmd_buffer);
+				wican_commands_process((const uint8_t*)cmd_response, enc_data_len, isExport, cmd_buffer, elm327_response, q);
 
 				if (cmd_buffer[0] != 0) { // so that empty command will not reply
 					strcat(cmd_buffer, "\r>");

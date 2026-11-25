@@ -28,13 +28,10 @@
 
 #define TAG  __func__
 
-#define KEEPALIVE_IDLE              5
-#define KEEPALIVE_INTERVAL          5
-#define KEEPALIVE_COUNT             3
-
 #define PORT_CLOSED_BIT			BIT0
 #define PORT_OPEN_BIT			BIT1
 
+const static int TCP_BUF_SIZE = CONFIG_LWIP_TCP_MSS; // 1440
 
 static uint32_t server_port = 0;
 static int sock = -1;
@@ -45,11 +42,11 @@ static SemaphoreHandle_t xTCP_Socket_Semaphore;
 
 static uint8_t udp_enable = 0;
 
-static void tcp_server_rx_task(void *pvParameters)
+static void tcp_rx_task(void *pvParameters)
 {
+	char* ws_data = malloc(TCP_BUF_SIZE); // no need to clear since task runs forever
     xdev_buffer rx_buffer;
 	rx_buffer.dev_channel = DEV_WIFI;
-	char ws_data[512];
 
 wait_skt_rx:
 	xEventGroupWaitBits(
@@ -60,11 +57,14 @@ wait_skt_rx:
 					  portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
 	while(1)
 	{
-		const int len = recv(sock, ws_data, sizeof(ws_data), 0);
+		const int len = recv(sock, ws_data, TCP_BUF_SIZE, 0);
         //if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ) )
         {
         	//check if sock still connected?
 			if (len < 0) {
+				if (errno == EINTR) {
+					continue; // Interrupted by a signal, repeating
+				}
 				xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
 				xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 				ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
@@ -95,6 +95,71 @@ wait_skt_rx:
 			//xSemaphoreGive( xTCP_Socket_Semaphore );
         }
 
+	}
+}
+
+static void tcp_tx_task(void *pvParameters)
+{
+	char* ws_data = malloc(TCP_BUF_SIZE); // no need to clear since task runs forever
+	xdev_buffer tx_buffer;
+
+wait_skt_tx:
+	xEventGroupWaitBits(
+					  xSocketEventGroup,   /* The event group being tested. */
+					  PORT_OPEN_BIT, /* The bits within the event group to wait for. */
+					  pdFALSE,        /* BIT_0 & BIT_4 should be cleared before returning. */
+					  pdFALSE,       /* Don't wait for both bits, either bit will do. */
+					  portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
+	ESP_LOGI(TAG, "Socket connected...");
+	while(1)
+	{
+		if (xQueueReceive(*xTX_Queue, &tx_buffer, portMAX_DELAY) != pdTRUE) {
+			continue;
+		}
+
+		int offset = 0;
+		while (true) {
+			memcpy(ws_data + offset, tx_buffer.ucElement, tx_buffer.usLen);
+			offset += tx_buffer.usLen;
+
+			// hand made Nagle's algorithm but with lower latency
+			if (xQueuePeek(*xTX_Queue, &tx_buffer, pdMS_TO_TICKS(3))
+					&& offset + tx_buffer.usLen < TCP_BUF_SIZE) {
+				if (xQueueReceive(*xTX_Queue, &tx_buffer, 0) != pdTRUE) {
+					ESP_LOGE(TAG, "xQueueReceive() fails");
+					assert(false);
+				}
+			} else {
+				break;
+			}
+		}
+
+		//if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ))
+		{
+			int to_write = offset;
+			while (to_write > 0)
+			{
+				int written = send(sock, ws_data + (offset - to_write), to_write, 0);
+				if (written < 0)
+				{
+					if (errno == EINTR) {
+						continue; // Interrupted by a signal, repeating
+					}
+					if (errno == ENOMEM) {
+						vTaskDelay(pdMS_TO_TICKS(5));
+						continue; // retry sending
+					}
+					ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+					xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
+					xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
+					//xSemaphoreGive( xTCP_Socket_Semaphore );
+					goto wait_skt_tx;
+				}
+				to_write -= written;
+			}
+			
+			//xSemaphoreGive( xTCP_Socket_Semaphore );
+		}
 	}
 }
 
@@ -179,73 +244,12 @@ wait_skt_tx:
 	}
 }
 
-static void tcp_server_tx_task(void *pvParameters)
-{
-	xdev_buffer tx_buffer;
-	char ws_data[512];
-
-wait_skt_tx:
-	xEventGroupWaitBits(
-					  xSocketEventGroup,   /* The event group being tested. */
-					  PORT_OPEN_BIT, /* The bits within the event group to wait for. */
-					  pdFALSE,        /* BIT_0 & BIT_4 should be cleared before returning. */
-					  pdFALSE,       /* Don't wait for both bits, either bit will do. */
-					  portMAX_DELAY );/* Wait a maximum of 100ms for either bit to be set. */
-	ESP_LOGI(TAG, "Socket connected...");
-	while(1)
-	{
-		if (xQueueReceive(*xTX_Queue, &tx_buffer, portMAX_DELAY) != pdTRUE) {
-			continue;
-		}
-
-		int offset = 0;
-		while (true) {
-			memcpy(ws_data + offset, tx_buffer.ucElement, tx_buffer.usLen);
-			offset += tx_buffer.usLen;
-
-			if (xQueuePeek(*xTX_Queue, &tx_buffer, pdMS_TO_TICKS(1))
-					&& offset + tx_buffer.usLen < sizeof(ws_data)) {
-				if (xQueueReceive(*xTX_Queue, &tx_buffer, 0) != pdTRUE) {
-					ESP_LOGE(TAG, "xQueueReceive() fails");
-					assert(false);
-				}
-			} else {
-				break;
-			}
-		}
-
-		//if( xSemaphoreTake( xTCP_Socket_Semaphore, portMAX_DELAY ))
-		{
-			int to_write = offset;
-			while (to_write > 0)
-			{
-				int written = send(sock, ws_data + (offset - to_write), to_write, 0);
-				if (written < 0)
-				{
-					ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-					xEventGroupSetBits( xSocketEventGroup, PORT_CLOSED_BIT );
-					xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
-					//xSemaphoreGive( xTCP_Socket_Semaphore );
-					goto wait_skt_tx;
-				}
-				to_write -= written;
-			}
-			
-			//xSemaphoreGive( xTCP_Socket_Semaphore );
-		}
-	}
-}
-
 char rx_buffer[128];
 static void tcp_server_task(void *pvParameters)
 {
     char addr_str[128];
     int addr_family = AF_INET;
     int ip_protocol = 0;
-    int keepAlive = 1;
-    int keepIdle = KEEPALIVE_IDLE;
-    int keepInterval = KEEPALIVE_INTERVAL;
-    int keepCount = KEEPALIVE_COUNT;
     struct sockaddr_storage dest_addr;
 
 
@@ -317,11 +321,19 @@ accept_socket:
 				ESP_LOGE(TAG, "Unable to accept connection: errno %d", errno);
 				goto accept_socket;
 			}
-			xEventGroupClearBits(xSocketEventGroup, PORT_CLOSED_BIT);// Set tcp keepalive option
-			setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(int));
-			setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
-			setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
-			setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+			xEventGroupClearBits(xSocketEventGroup, PORT_CLOSED_BIT);
+			
+		    int keepAlive = 1; // LwIP stack itself checks the liveness of the TCP connection
+			setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive));
+		    int keepIdle = 5; // Start checking the liveness after 5 seconds of silence
+			setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(keepIdle));
+		    int keepInterval = 5; // Repeat checking the liveness every 5 sec
+			setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(keepInterval));
+		    int keepCount = 3; // Terminate TCP connection after 3 failed checks
+			setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(keepCount));
+			int nodelay = 1; // Turn off Nagle's algorithm (200 ms delay)
+			setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
 			// Convert ip address to string
 			if (source_addr.ss_family == PF_INET)
 			{
@@ -338,7 +350,7 @@ accept_socket:
 			xEventGroupClearBits( xSocketEventGroup, PORT_OPEN_BIT );
 			ESP_LOGI(TAG, "Socket disconnected...");
 			notify_connection_closed(DEV_WIFI);
-			shutdown(sock, 0);
+			shutdown(sock, SHUT_RDWR);
 			close(sock);
 		}
 		else
@@ -434,8 +446,8 @@ int8_t tcp_server_init(uint32_t port, QueueHandle_t *xTXp_Queue, QueueHandle_t *
 	xTaskCreate(tcp_server_task, "tcp_server", 1024*3, NULL, 5, &xserver_handle);
 	if(!udp_enable)
 	{
-		xTaskCreate(tcp_server_rx_task, "tcp_rx_server", 1024*3, NULL, 5, &xrx_handle);
-		xTaskCreate(tcp_server_tx_task, "tcp_tx_server", 1024*3, NULL, 5, &xtx_handle);
+		xTaskCreate(tcp_rx_task, "tcp_rx_task", 1024*3, NULL, 5, &xrx_handle);
+		xTaskCreate(tcp_tx_task, "tcp_tx_task", 1024*3, NULL, 5, &xtx_handle);
 	}
 	else
 	{

@@ -207,7 +207,6 @@ static bool setHostTxQueue(QueueHandle_t* const queue)
 
 	if (queue == NULL && old_txQueue != NULL) {
 		ESP_LOGW(TAG, "to NULL");
-		debug_mem_usage();
 
 		vTaskDelay(pdMS_TO_TICKS(10));
 		xQueueReset(*old_txQueue);
@@ -610,39 +609,6 @@ void fill_adapter_name(char* name)
 	for (int i = 0; i < 6; ++i) {
 		offset += sprintf(name + offset, "%02x", derived_mac_addr[i]);
 	}
-}
-
-// API (declared in types.h)
-void debug_mem_usage()
-{
-#if ( configUSE_TRACE_FACILITY == 1 )
-	multi_heap_info_t info = {0};
-	heap_caps_get_info(&info, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); // internal RAM, memory capable to store data or to create new task
-	// info.total_free_bytes;   // total currently free in all non-continues blocks
-	// info.minimum_free_bytes;  // minimum free ever
-	// info.largest_free_block;   // largest continues block to allocate big array
-
-	ESP_LOGW(TAG, "Total free: %d bytes, Min free: %d bytes, Continues block: %d bytes",
-		info.total_free_bytes, info.minimum_free_bytes, info.largest_free_block);
-
-	// Get the number of tasks
-	const uint32_t task_count = uxTaskGetNumberOfTasks();
-	// Dynamically allocate an array to hold the states
-	TaskStatus_t *task_status_array = malloc(task_count * sizeof(TaskStatus_t));
-	if (task_status_array != NULL) {
-		uxTaskGetSystemState(task_status_array, task_count, NULL);
-
-		for (int i = 0; i < task_count; ++i) {
-			ESP_LOGW(TAG, "Task: %-16s State: %d Priority: %2d Free stack: %d bytes",
-				task_status_array[i].pcTaskName,
-				task_status_array[i].eCurrentState,
-				task_status_array[i].uxCurrentPriority,
-				task_status_array[i].usStackHighWaterMark);
-		}
-		
-		free(task_status_array);
-	}
-#endif
 }
 
 #if ESP_LOG_MAIN != 0

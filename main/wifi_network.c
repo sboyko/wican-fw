@@ -309,7 +309,7 @@ void wifi_network_init()
     	ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta) );
     	if(xwifi_handle == NULL)
     	{
-    		xTaskCreate(wifi_conn_task, "wifi_conn_task", 1024*3, NULL, 5, &xwifi_handle);
+    		xTaskCreate(wifi_conn_task, "wifi_conn_task", 1024*2, NULL, 5, &xwifi_handle);
     	}
     }
 

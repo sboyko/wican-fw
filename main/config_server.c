@@ -1417,14 +1417,15 @@ static httpd_handle_t config_httpd_start()
 
 static void ws_tx_task(void *pvParameters)
 {
-	static char ws_data[1024]; // can go to .bss since task runs forever
+	static const int BUFFER_SIZE = 1024;
+	char* ws_data = malloc(BUFFER_SIZE); // no need to clear since task runs forever
 
 	xdev_buffer tx_buffer;
-	httpd_ws_frame_t ws_pkt;
-	memset(&ws_pkt, 0, sizeof(ws_pkt));
-	ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+	httpd_ws_frame_t ws_pkt = {
+		.type = HTTPD_WS_TYPE_TEXT,
+	};
 
-	const uint64_t MAX_NON_DELAY_PERIOD_MS = (CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000) / 4;
+	static const uint64_t MAX_NON_DELAY_PERIOD_MS = (CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000) / 4;
 	uint64_t next_delay_ms = _tick_get_ms() + MAX_NON_DELAY_PERIOD_MS;
 	int bytes_after_delay = 0;
 
@@ -1441,12 +1442,12 @@ static void ws_tx_task(void *pvParameters)
 				memcpy(ws_data + offset, tx_buffer.ucElement, tx_buffer.usLen);
 				offset += tx_buffer.usLen;
 
-				if (offset + sizeof(tx_buffer.ucElement) / 4 > sizeof(ws_data)) {
+				if (offset + sizeof(tx_buffer.ucElement) / 4 > BUFFER_SIZE) {
 					break;
 				}
 
 				if (xQueuePeek(*xTX_Queue, &tx_buffer, pdMS_TO_TICKS(4))
-						&& offset + tx_buffer.usLen <= sizeof(ws_data)) {
+						&& offset + tx_buffer.usLen <= BUFFER_SIZE) {
 					if (xQueueReceive(*xTX_Queue, &tx_buffer, 0) != pdTRUE) {
 						ESP_LOGE(TAG, "xQueueReceive() fails");
 						assert(false);
@@ -1805,7 +1806,7 @@ static void ws_server_task_reset(struct ws_server_context* context)
 	vTaskDelay(WEBSOCKET_RECONNECT_TIMEOUT);
 }
 
-static void ws_server_rx_task(void *pvParameters)
+static void ws_server_task(void *pvParameters)
 {
 	struct ws_server_context context = {0};
 
@@ -1918,8 +1919,8 @@ void config_server_start(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, c
 		server = config_httpd_start();
 
 		if((settings_get_int(CFG_WIC_HSI) & WIC_HSI_WEB) == WIC_HSI_WEB) {
-			xTaskCreate(ws_tx_task, "ws_tx_task", 1024*4, NULL, 5, &ws_tx_task_handle);
-			xTaskCreate(ws_server_rx_task, "ws_server_rx_task", 1024*3, NULL, 5, NULL);
+			xTaskCreate(ws_tx_task, "ws_tx_task", 1024*3, NULL, 5, &ws_tx_task_handle);
+			xTaskCreate(ws_server_task, "ws_server_task", 1024*3, NULL, 5, NULL);
 		}
     }
 }

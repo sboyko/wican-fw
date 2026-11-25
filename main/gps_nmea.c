@@ -328,7 +328,7 @@ void gps_nmea_send_commands(const char* commands, QueueHandle_t* q)
 
 		if (endPos > i + 1) {
 			if (asteriskPos != 0 && endPos - asteriskPos == 3) {
-				if (!gps_serial_send_buffer(&commands[i], endPos - i)
+				if (!gps_serial_send_buffer(&commands[i - 1], endPos - i + 1)
 					|| !gps_serial_send_buffer("\r\n", 0)
 					) {
 					fails = true;
@@ -336,16 +336,16 @@ void gps_nmea_send_commands(const char* commands, QueueHandle_t* q)
 				} else {
 					if (q) {
 						nmea_response(GPS_REPLY_HEADER, 0, q);
-						nmea_response(&commands[i], endPos - i, q);
+						nmea_response(&commands[i - 1], endPos - i + 1, q);
 						nmea_response("\r", 0, q);
 					}
 				}
 			}
 			else {
 				char checksum[3];
-				_calc_checksum(&commands[i + 1], endPos - i - 1, checksum);
+				_calc_checksum(&commands[i], endPos - i, checksum);
 
-				if (!gps_serial_send_buffer(&commands[i], endPos - i)
+				if (!gps_serial_send_buffer(&commands[i - 1], endPos - i + 1)
 					|| !gps_serial_send_buffer(checksum, 3)
 					|| !gps_serial_send_buffer("\r\n", 0)
 					) {
@@ -354,7 +354,7 @@ void gps_nmea_send_commands(const char* commands, QueueHandle_t* q)
 				} else {
 					if (q) {
 						nmea_response(GPS_REPLY_HEADER, 0, q);
-						nmea_response(&commands[i], endPos - i, q);
+						nmea_response(&commands[i - 1], endPos - i + 1, q);
 						nmea_response(checksum, 3, q);
 						nmea_response("\r", 0, q);
 					}

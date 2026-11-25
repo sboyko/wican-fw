@@ -766,7 +766,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 
 static void ble_task(void *pvParameters)
 {
-	static uint8_t ble_send_buf[BLE_ATT_DATA_MAX_SIZE]; // can go to .bss since task runs forever
+	uint8_t* ble_send_buf = malloc(BLE_ATT_DATA_MAX_SIZE); // no need to clear since task runs forever
 
 	xdev_buffer tx_buffer;
 	uint32_t ble_send_buf_len = 0;

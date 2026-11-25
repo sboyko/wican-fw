@@ -118,8 +118,17 @@ static const uint16_t CMD_OTA_START = 30; // in = image_size(uint32_t); "OK" rep
 static const uint16_t CMD_OTA_UPLOAD = 31; // in = data; "OK" reply
 static const uint16_t CMD_OTA_FINISH = 32; // "OK" reply
 
-static int dispatchSetting(const int command, const uint8_t* const data, const size_t data_len, char* const response, const size_t response_len)
-{
+static const uint16_t CMD_DEBUG = 40; // in = debug_level(uint32_t); 'Dbg:..\r' lines and final "OK" reply
+
+static int dispatchSetting(
+	const int command,
+	const uint8_t* const data,
+	const size_t data_len,
+	char* const response,
+	const size_t response_len,
+	bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q),
+	QueueHandle_t *q
+) {
 	switch (command) {
 
 	case CMD_PING: {
@@ -240,6 +249,18 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 		break; // OK
 	}
 
+	case CMD_DEBUG: {
+		uint32_t level = 0;
+		if (data_len >= sizeof(level)) {
+			memcpy(&level, data, sizeof(level));
+		}
+
+		if (level == 1) {
+			wican_debug_mem_usage(send_to_host, q);
+		}
+		break; // OK
+	}
+
 	default: {
 		strcat(response, "Cmd_unknown");
 		return ESP_FAIL;
@@ -251,8 +272,14 @@ static int dispatchSetting(const int command, const uint8_t* const data, const s
 	return 1000; // indicates plain text
 }
 
-void wican_commands_process(const uint8_t* const cipherdata, const size_t cipherdata_len, const bool isExport, char* const response)
-{
+void wican_commands_process(
+	const uint8_t* const cipherdata,
+	const size_t cipherdata_len,
+	const bool isExport,
+	char* const response,
+	bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q),
+	QueueHandle_t *q
+) {
 	static uint16_t g_command_counter = 0;
 
 	if (!aes_gcm_init(cipherdata, cipherdata_len, isExport, response)) {
@@ -288,7 +315,7 @@ void wican_commands_process(const uint8_t* const cipherdata, const size_t cipher
 		}
 
 		outdata[0] = 0;
-		const int reply_len = dispatchSetting(cmd, data + 4, data_len - 4, outdata, CMD_PDU_MAX_SIZE - 1);
+		const int reply_len = dispatchSetting(cmd, data + 4, data_len - 4, outdata, CMD_PDU_MAX_SIZE - 1, send_to_host, q);
 
 		if (reply_len < 0) { // error text
 			strcat(response, outdata);

@@ -72,9 +72,19 @@ Disable the Hardware Console Output
     #endif // NDEBUG
 #endif // ESP_LOG_MAIN
 
+typedef struct QueueDefinition *QueueHandle_t;
+
 typedef enum {
     ERR_ESP_TYPE     = 1, // esp_err_t
     ERR_MBEDTLS_TYPE = 2, // коды ошибок из mbedTLS (int)
 } wican_log_error_t;
 
+// Describe error code depending on its type
 void wican_log_error(char* const buffer, int err_code, const wican_log_error_t err_type);
+
+// Output overall memory usage and the list of all tasksk with uxTaskGetStackHighWaterMark
+void wican_debug_mem_usage(
+	bool (*send_to_host)(const char*, uint32_t, QueueHandle_t *q),
+	QueueHandle_t *q
+);
+
