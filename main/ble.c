@@ -84,10 +84,10 @@ static uint8_t adv_config_done = 0;
 // Up to 251 bytes at the radio level (255 with MIC), so _242_ bytes available for attribute data.
 //
 #define BLE_ATT_DATA_MIN_SIZE                     20
-#define BLE_ATT_DATA_MAX_SIZE                     240 // intentionally smaller then 242 to prevents Message Integrity Check (MIC) failure (reason = 0x3d)
+#define BLE_ATT_DATA_MAX_SIZE                     242 // intentionally smaller then 242 to prevents Message Integrity Check (MIC) failure (reason = 0x3d)
 
 static uint8_t dev_name[32] = {0}; // sync with ESP_GAP_DEVICE_NAME_MAX(32)
-static uint8_t manufacturer[]="MeatPi";
+static uint8_t manufacturer[]="Abit";
 
 static uint16_t profile_handle_table[HRS_IDX_NB];
 static TaskHandle_t xble_handle = NULL;
@@ -120,9 +120,9 @@ static uint8_t sec_service_uuid[16] = {
 
 static esp_ble_adv_data_t heart_rate_adv_config = {
     .set_scan_rsp = false,
-    .include_txpower = true,
-    .min_interval = ESP_BLE_CONN_INT_MIN, //slave connection min interval, Time = min_interval * 1.25 msec
-    .max_interval = ESP_BLE_CONN_INT_MIN, //slave connection max interval, Time = max_interval * 1.25 msec
+    .include_txpower = false,
+    .min_interval = ESP_BLE_CONN_INT_MIN, // 7.5 мс (предпочтительный интервал для клиента)
+    .max_interval = 0x0C, // 15 мс
     .appearance = 0x00,
     .manufacturer_len = 0, //TEST_MANUFACTURER_DATA_LEN,
     .p_manufacturer_data =  NULL, //&test_manufacturer[0],
@@ -395,8 +395,8 @@ static void __attribute__((unused)) remove_all_bonded_devices(void)
 
 static bool ble_tx_ready()
 {
-	if(ble_connected()) {
-		return esp_ble_get_cur_sendable_packets_num(spp_conn_id) > 0;
+	if (ble_connected()) {
+		return (xEventGroupGetBits(s_ble_event_group) & BLE_CONGEST_BIT) == 0;
 	}
 	return false;
 }
@@ -409,7 +409,7 @@ static void ble_send(uint8_t* buf, uint8_t buf_len, int charactValueIndex)
 		ESP_LOG_BUFFER_HEXDUMP(TAG, buf, buf_len, ESP_LOG_INFO);
 	}
 
-	vTaskDelay(pdMS_TO_TICKS(3)); // prevents Message Integrity Check (MIC) failure (reason = 0x3d)
+	//vTaskDelay(pdMS_TO_TICKS(3)); // prevents Message Integrity Check (MIC) failure (reason = 0x3d)
 }
 
 static bool start_advertising()
@@ -658,8 +658,8 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 
 			memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
 			conn_params.latency = 0;
-			conn_params.min_int = 8;
-			conn_params.max_int = 9;
+			conn_params.min_int = 0x0C; // 15 ms
+			conn_params.max_int = 0x0C; // 15 ms
 			conn_params.timeout = ESP_BLE_CONN_SUP_TOUT_MAX / 8; // 4s
 
 			if (esp_ble_gap_update_conn_params(&conn_params) == ESP_OK) {
@@ -667,6 +667,21 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 					conn_params.min_int, conn_params.max_int, conn_params.latency, conn_params.timeout);
 			} else {
 				ESP_LOGE(TAG, "update(conn_params) fails");
+			}
+
+			// Максимальный размер физического пакета (Data Length Extension)
+			esp_ble_gap_set_pkt_data_len(param->connect.remote_bda, 251);
+
+			// Переход на 2 Мбит/с (если в ПК адаптер Bluetooth 5.0+)
+			esp_err_t ret = esp_ble_gap_set_preferred_phy(
+				param->connect.remote_bda,       // MAC-адрес подключенного устройства
+				ESP_BLE_GAP_PHY_OPTIONS_NO_PREF, // Использовать заданные маски TX/RX
+				ESP_BLE_GAP_PHY_2M_PREF_MASK,    // Предпочтительный TX: 2M
+				ESP_BLE_GAP_PHY_2M_PREF_MASK,    // Предпочтительный RX: 2M
+				ESP_BLE_GAP_PHY_OPTIONS_NO_PREF  // Опции кодирования (нужны только для Coded PHY)
+			);
+			if (ret != ESP_OK) {
+				ESP_LOGE("BLE", "Set preferred PHY failed: %s", esp_err_to_name(ret));
 			}
 
     	    spp_conn_id = param->connect.conn_id;
@@ -685,6 +700,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 			clear_perm_commands(true);
             //is_connected = false;
 			xEventGroupClearBits(s_ble_event_group, BLE_CONNECTED_BIT);
+			xEventGroupClearBits(s_ble_event_group, BLE_CONGEST_BIT);
 			notify_connection_closed(DEV_BLE);
 
 			wifi_network_restart();
@@ -801,7 +817,7 @@ wait_ble:
 
 				int free_packet = esp_ble_get_cur_sendable_packets_num(spp_conn_id);
 
-				if(free_packet && !(BLE_CONGEST_BIT & xEventGroupGetBits(s_ble_event_group)))
+				if(free_packet > 0)
 				{
 					if (rx_size >= 0) {
 						char *buff = (char*) ble_send_buf;
@@ -886,16 +902,12 @@ wait_ble:
 	}
 }
 
-bool ble_connected(void)
+bool ble_connected()
 {
-	EventBits_t uxBits;
-	if(s_ble_event_group != NULL)
-	{
-		uxBits = xEventGroupGetBits(s_ble_event_group);
-
-		return (uxBits & BLE_CONNECTED_BIT)?1:0;
+	if (s_ble_event_group != NULL) {
+		return (xEventGroupGetBits(s_ble_event_group) & BLE_CONNECTED_BIT) == BLE_CONNECTED_BIT;
 	}
-	else return 0;
+	return false;
 }
 
 void ble_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, uint32_t passkey, char* uid)

@@ -1015,7 +1015,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 	if (can_tx_task(&txframe) != ESP_OK) {
 		if (req_expected_rsp != 0 && req_expected_rsp != 0xFF) {
 			elm327_waiting_answer = false;
-			elm327_response("CANERROR\r>", 0, queue);
+			elm327_response(can_is_enabled() ? "CANERROR\r>" : "?\r>", 0, queue);
 			close_skip_mode();
 			return;
 		}
@@ -1182,7 +1182,7 @@ static void elm327_request_wait_answer(uint8_t req_expected_rsp, twai_message_t 
 				rx_frame.data[4] = ~rx_frame.data[3];
 
 				if (can_tx_task(txframe) != ESP_OK) {
-					elm327_response("CANERROR\r>", 0, queue);
+					elm327_response(can_is_enabled() ? "CANERROR\r>" : "?\r>", 0, queue);
 					close_skip_mode();
 					break;
 				}
