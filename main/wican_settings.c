@@ -68,7 +68,7 @@ static const cfg_desc_t s_descriptors[CFG_SETTINGS_COUNT] = {
 	[CFG_WIFI_AP_CH] = DESC_I32("ap_ch", 0),
 	[CFG_WIFI_AP_PROTO] = DESC_I32("ap_proto", 0),
 	[CFG_WIFI_AP_PORT] = DESC_I32("ap_port", 0),
-	[CFG_UART_BAUD] = DESC_I32("uart_baud", 460800), // единственная ненулевая настройка
+	[CFG_UART_BAUD] = DESC_I32("uart_baud", 921600), // единственная ненулевая настройка
 
 	[CFG_TEST_CANARY] = DESC_STR("canary", "", LEN_TEST_CANARY, 0),
 	[CFG_WIC_PASS] = DESC_STR("wic_pass", "", LEN_WIC_PASS, 0),

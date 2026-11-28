@@ -19,7 +19,7 @@ typedef enum {
 	CFG_WIFI_AP_CH, // Soft-AP channel (1..13, 0 - let the driver choose automatically)
 	CFG_WIFI_AP_PROTO, // Soft-AP protocol (0=TCP / 1=UDP)
 	CFG_WIFI_AP_PORT, // Soft-AP port (0..65535)
-	CFG_UART_BAUD, // UART USB baudrate (460800 by default, equal to the one used for ESP32 flashing)
+	CFG_UART_BAUD, // UART USB baudrate
 
 	// Строковые параметры (str)
 	CFG_TEST_CANARY, // Always contains 'canary' value to test NVS encryption via raw flash read

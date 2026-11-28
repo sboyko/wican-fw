@@ -798,11 +798,8 @@ wait_ble:
 									portMAX_DELAY);
 
 				if (xQueuePeek(*xBle_TX_Queue, &tx_buffer, pdMS_TO_TICKS(5)) != pdTRUE) {
-					if (rx_size == -1) {
+					if (rx_size < 0) {
 						rx_size = elm327_rx_queue_size(xBle_RX_Queue);
-						if (rx_size == -1) {
-							continue;
-						}
 					} else {
 						rx_size = -1;
 					}

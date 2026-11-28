@@ -43,6 +43,12 @@ void clear_perm_commands(bool close_monitor_all);
 int8_t elm327_process_can_frame(const uint8_t *buf, twai_message_t *frame);
 int elm327_print_canid(char *buff, twai_message_t *frame);
 
+/**
+ * Return:
+ *  -2   skip mode is not active
+ *  -1   queue size not changed since last call
+ *  >=0  actual queue size
+ */
 int elm327_rx_queue_size(QueueHandle_t *rx_queue);
 
 void elm327_kline_init(QueueHandle_t* kline_tx_q, QueueHandle_t* kline_rx_q);

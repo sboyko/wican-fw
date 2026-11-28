@@ -25,6 +25,7 @@
 #include <esp_timer.h>
 #include <driver/uart.h>
 #include <driver/gpio.h>
+#include <soc/uart_reg.h>
 
 #include "esp_log_wican.h"
 #include "wican_settings.h"
@@ -35,13 +36,12 @@
 
 
 typedef enum {
-    UART_USB = 1,
-    UART_GPS = 2,
+	UART_USB = 1,
+	UART_GPS = 2,
 } UartMode;
 
-static const int UART_USB_BAUDRATE = 460800; // 2400000
 static const int UART_RX_BUF_SIZE = 1024;
-static const int RX_QUEUE_WAIT_TIME_MS = 10;
+static const int UART_SWITCH_WAIT_TIME_MS = 30;
 #define KWP_COMMAND_LENGHT 260 // maximum KWP message length in bytes (including header and CS)
 
 static QueueHandle_t *xuart_tx_queue = NULL, *xuart_rx_queue = NULL;
@@ -50,265 +50,244 @@ static QueueHandle_t uart0_queue, uart1_queue;
 static QueueHandle_t gps_rx_queue;
 
 static UartMode request_uart_mode = UART_USB;
-static int request_uart_baud = 0;
 static int64_t uart_mode_time = 0;
 
+static TaskHandle_t kline_task_handle = NULL;
 static int kline_request_baud = 0;
 static int64_t kline_request_time = 0;
 
 static uart_config_t usb_uart_config = {
-    .baud_rate = UART_USB_BAUDRATE,
-    .data_bits = UART_DATA_8_BITS,
-    .parity = UART_PARITY_DISABLE,
-    .stop_bits = UART_STOP_BITS_1,
-    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-    .source_clk = UART_SCLK_APB,
+	.data_bits = UART_DATA_8_BITS,
+	.parity = UART_PARITY_DISABLE,
+	.stop_bits = UART_STOP_BITS_1,
+	.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+	.source_clk = UART_SCLK_APB,
 };
 
 static uart_config_t kline_uart_config = {
-    .baud_rate = 0,
-    .data_bits = UART_DATA_8_BITS,
-    .parity = UART_PARITY_DISABLE,
-    .stop_bits = UART_STOP_BITS_1,
-    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-    .source_clk = UART_SCLK_APB,
+	.data_bits = UART_DATA_8_BITS,
+	.parity = UART_PARITY_DISABLE,
+	.stop_bits = UART_STOP_BITS_1,
+	.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+	.source_clk = UART_SCLK_APB,
 };
 
 static uart_config_t gps_uart_config = {
-    .baud_rate = 0,
-    .data_bits = UART_DATA_8_BITS,
-    .parity = UART_PARITY_DISABLE,
-    .stop_bits = UART_STOP_BITS_1,
-    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-    .source_clk = UART_SCLK_APB,
+	.data_bits = UART_DATA_8_BITS,
+	.parity = UART_PARITY_DISABLE,
+	.stop_bits = UART_STOP_BITS_1,
+	.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+	.source_clk = UART_SCLK_APB,
 };
 
 static void setup_uart_usb(const uart_port_t uart_num, const uart_config_t* const uart_config)
 {
-    if (uart_num == UART_NUM_0) {
-        // We won't use a buffer for sending data.
-        //uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
-        int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
-        if (ret != ESP_OK) {
-            ESP_LOGE(__func__, "uart_driver_install(%d) fails (%d)", uart_num, ret);
-        }
+	if (uart_num == UART_NUM_0) {
+		// We won't use a buffer for sending data.
+		//uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 0, NULL, ESP_INTR_FLAG_LEVEL1);
+		int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 10, &uart0_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
+		if (ret != ESP_OK) {
+			ESP_LOGE(__func__, "uart_driver_install(%d) fails (%d)", uart_num, ret);
+		}
 
-        uart_param_config(uart_num, uart_config);
+		uart_param_config(uart_num, uart_config);
+		uart_set_pin(uart_num, 21, 20, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-        // // Enable UART RX FIFO full threshold interrupts
-        // uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL|UART_INTR_RXFIFO_OVF);
+		// // Enable UART RX FIFO full threshold interrupts
+		// uart_enable_intr_mask(uart_num, UART_INTR_RXFIFO_FULL|UART_INTR_RXFIFO_OVF);
 
-        uart_set_pin(uart_num, 21, 20, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    }
-    else {
-        int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE * 2, 0, 10, &uart1_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
-        if (ret != ESP_OK) {
-            ESP_LOGE(__func__, "uart_driver_install(%d) fails (%d)", uart_num, ret);
-        }
+		uart_intr_config_t uart_intr = {
+			.intr_enable_mask = UART_RXFIFO_FULL_INT_ENA_M | UART_RXFIFO_TOUT_INT_ENA_M,
+			.rxfifo_full_thresh = 64, // Половина аппаратного 128-байтного FIFO (оптимально для длинных пакетов)
+			.rx_timeout_thresh = 3, // ~15-30 мкс тишины для мгновенного срабатывания на коротких командах
+			.txfifo_empty_intr_thresh = 10,
+		};
+		uart_intr_config(uart_num, &uart_intr);
 
-        uart_param_config(uart_num, uart_config);
+	}
+	else {
+		int ret = uart_driver_install(uart_num, UART_RX_BUF_SIZE, 0, 10, &uart1_queue, ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM); // note that 'CONFIG_UART_ISR_IN_IRAM=y' in config
+		if (ret != ESP_OK) {
+			ESP_LOGE(__func__, "uart_driver_install(%d) fails (%d)", uart_num, ret);
+		}
 
-        uart_set_pin(uart_num, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    }
+		uart_param_config(uart_num, uart_config);
+		uart_set_pin(uart_num, 4, 5, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+		uart_intr_config_t uart_intr = {
+			.intr_enable_mask = UART_RXFIFO_FULL_INT_ENA_M | UART_RXFIFO_TOUT_INT_ENA_M,
+			.rxfifo_full_thresh = 64, // Половина аппаратного 128-байтного FIFO (оптимально для длинных пакетов)
+			.rx_timeout_thresh = 3, // ~15-30 мкс тишины для мгновенного срабатывания на коротких командах
+			.txfifo_empty_intr_thresh = 10,
+		};
+		uart_intr_config(uart_num, &uart_intr);
+	}
 }
 
 static void close_uart_usb(const uart_port_t uart_num)
 {
-    uart_driver_delete(uart_num);
+	uart_driver_delete(uart_num);
 }
 
 static void uart_rx_task(void *arg)
 {
 	xdev_buffer io_buffer;
-    uart_event_t event;
-    char ws_data[KWP_COMMAND_LENGHT];
+	io_buffer.dev_channel = DEV_UART;
+	uart_event_t event;
 
-    const uart_port_t uart_num = UART_NUM_0;
-    UartMode uart_mode = UART_GPS;
-    int uart_baud = UART_USB_BAUDRATE;
+	static const uart_port_t uart_num = UART_NUM_0;
+	UartMode uart_mode = UART_USB;
+	size_t buffered_len = 0;
+	int received_bytes = 0;
+	bool uart_wait_mode = false;
 
-    int failed_waits = 0;
-    int wait_ms = 2;
-    int received_bytes = 0;
-    bool uart_wait_mode = false;
+	while (true) {
+		if (uart_mode != UART_USB && esp_timer_get_time() - uart_mode_time > 6*1000*1000) {
+			request_uart_mode = UART_USB;  // no GPS activity for 6s
+		}
+		if (uart_mode != request_uart_mode) {
+			uart_mode = request_uart_mode;
 
-    while (true) {
-        if (uart_mode != UART_USB
-                && (uart_mode_time == 0 || esp_timer_get_time() - uart_mode_time > 10*1000*1000)) {
-            request_uart_mode = UART_USB;
-            request_uart_baud = UART_USB_BAUDRATE;
-        }
-        if (uart_mode != request_uart_mode) {
-            uart_mode = request_uart_mode;
-        }
-        if (uart_baud != request_uart_baud) {
-            uart_baud = request_uart_baud;
+			uart_wait_tx_done(uart_num, pdMS_TO_TICKS(UART_SWITCH_WAIT_TIME_MS / 2)); // Ждём окончания текущей отправки
+			uart_param_config(uart_num, uart_mode == UART_GPS ? &gps_uart_config : &usb_uart_config);  // Меняем параметры передачи на лету
+			uart_flush_input(uart_num);                     // Очищаем старый мусор в RX-буфере
+		}
 
-            close_uart_usb(uart_num);
+		if (xQueueReceive(uart0_queue, &event, pdMS_TO_TICKS(10)) == pdTRUE) {
+			if (event.type == UART_DATA) {
+				// Вычитываем всё, что успело накопиться в кольцевом буфере драйвера
+				uart_get_buffered_data_len(uart_num, &buffered_len);
 
-            switch (uart_mode) {
-                case UART_GPS: {
-                    setup_uart_usb(uart_num, &gps_uart_config);
-                    break;
-                }
-                default: {
-                    setup_uart_usb(uart_num, &usb_uart_config);
-                    break;
-                }
-            }
-        }
+				while (buffered_len > 0) {
+					io_buffer.usLen = MIN(buffered_len, sizeof(io_buffer.ucElement));
+					io_buffer.usLen = uart_read_bytes(uart_num, io_buffer.ucElement, io_buffer.usLen, 0);
+					if (io_buffer.usLen > 0) {
+						if (uart_mode == UART_GPS) {
+							xQueueSend(gps_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
+						} else {
+							if (xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(5)) != pdTRUE) {
+								//break;
+							}
+							received_bytes += io_buffer.usLen;
+						}
+					}
 
-     	if (xQueueReceive(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(uart_mode == UART_USB ? 0 : 1))) {
-            failed_waits = 0;
+					uart_get_buffered_data_len(uart_num, &buffered_len);
+				}
 
-            int offset = 0;
-            while (true) {
-                memcpy(ws_data + offset, io_buffer.ucElement, io_buffer.usLen);
-                offset += io_buffer.usLen;
+				if (received_bytes > UART_RX_BUF_SIZE) {
+					received_bytes = 0;
 
-                if (xQueuePeek(*xuart_tx_queue, &io_buffer, 0)
-                        && offset + io_buffer.usLen < sizeof(ws_data)) {
-                    if (xQueueReceive(*xuart_tx_queue, &io_buffer, 0) != pdTRUE) {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
+					const int size = elm327_rx_queue_size(xuart_rx_queue);
+					if (size >= 0) {
+						io_buffer.usLen = sprintf((char*)io_buffer.ucElement, "WAIT_%d\r", size);
+						xQueueSend(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(1));
+						uart_wait_mode = (size > 0);
+					} else if (size == -2) {
+						uart_wait_mode = false;
+					}
+				}
+			} else if (event.type == UART_FIFO_OVF || event.type == UART_BUFFER_FULL) {
+				// Сброс при переполнении, чтобы приём не завис
+				uart_flush_input(uart_num);
+				xQueueReset(uart0_queue);
+			}
+		}
+
+		if (uart_wait_mode) {
+			const int size = elm327_rx_queue_size(xuart_rx_queue);
+			if (size >= 0) {
+				io_buffer.usLen = sprintf((char*)io_buffer.ucElement, "WAIT_%d\r", size);
+				xQueueSend(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(1));
+				uart_wait_mode = (size > 0);
+			}
+		}
+	}
+}
+
+static void uart_tx_task(void *arg)
+{
+	const static int UART_RX_BUFFER_SIZE = UART_RX_BUF_SIZE / 2;
+	char* ws_data = malloc(UART_RX_BUFFER_SIZE); // no need to clear since task runs forever
+	xdev_buffer io_buffer;
+
+	static const uart_port_t uart_num = UART_NUM_0;
+
+	while (true) {
+	 	if (xQueueReceive(*xuart_tx_queue, &io_buffer, portMAX_DELAY) == pdTRUE) {
+			int offset = 0;
+			while (true) {
+				memcpy(ws_data + offset, io_buffer.ucElement, io_buffer.usLen);
+				offset += io_buffer.usLen;
+
+				if (offset + sizeof(io_buffer.ucElement) <= UART_RX_BUFFER_SIZE
+					&& xQueueReceive(*xuart_tx_queue, &io_buffer, pdMS_TO_TICKS(1)) == pdTRUE
+					) {
+					continue;
+				}
+				break;
+			}
 
 			int to_write = offset;
-			while (to_write > 0)
-			{
+			while (to_write > 0) {
 				int written = uart_write_bytes(uart_num, ws_data + (offset - to_write), to_write);
 				if (written < 0) {
-                    break;
+					break;
 				}
 				to_write -= written;
 			}
-        }
-
-        while (xQueueReceive(uart0_queue, &event, pdMS_TO_TICKS(wait_ms))) {
-            if (event.type == UART_DATA && event.size > 0) { // got new data
-                failed_waits = 0;
-
-                io_buffer.dev_channel = DEV_UART;
-                received_bytes += event.size;
-
-                int offset = 0;
-                while (offset < event.size) {
-                    io_buffer.usLen = MIN(event.size - offset, sizeof(io_buffer.ucElement));
-                    io_buffer.usLen = uart_read_bytes(uart_num, io_buffer.ucElement, io_buffer.usLen, 0);
-                    if (io_buffer.usLen <= 0) {
-                        break;
-                    }
-
-                    if (uart_mode == UART_GPS) {
-                        xQueueSend(gps_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
-                    } else {
-                        if (xQueueSend(*xuart_rx_queue, &io_buffer, pdMS_TO_TICKS(1)) != pdTRUE) {
-                            break;
-                        }
-                    }
-                    offset += io_buffer.usLen;
-                }
-
-                if (uart_mode == UART_USB && received_bytes > UART_RX_BUF_SIZE / 2) {
-                    received_bytes = 0;
-
-                    const int size = elm327_rx_queue_size(xuart_rx_queue);
-                    if (size >= 0) {
-                        sprintf(ws_data, "WAIT_%d\r", size);
-                        uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-                        uart_wait_mode = (size > 0);
-                    }
-                }
-
-                //vTaskDelay(pdMS_TO_TICKS(1)); // give a chance for CAN to process incoming commands
-                break;
-            }
-        }
-
-        if (uart_wait_mode) {
-            const int size = elm327_rx_queue_size(xuart_rx_queue);
-            if (size >= 0) {
-                sprintf(ws_data, "WAIT_%d\r", size);
-                uart_write_bytes(uart_num, ws_data, strlen(ws_data));
-                uart_wait_mode = (size > 0);
-
-                vTaskDelay(pdMS_TO_TICKS(1)); // prevents spamming
-            }
-        }
-        
-        wait_ms = (++failed_waits > 1500) ? RX_QUEUE_WAIT_TIME_MS : (uart_mode == UART_USB ? 2 : 1);
-    }
+		}
+	}
 }
-
-/*
-static void uart_tx_task(void *arg)
-{
-    xdev_buffer tx_buffer;
-
-    while (1)
-    {
-    	if (xQueueReceive(*xuart_tx_queue, &tx_buffer, portMAX_DELAY)) {
-        	if (uart_write_bytes(uart_num, tx_buffer.ucElement, tx_buffer.usLen) != tx_buffer.usLen) {
-                assert(false);
-            }
-        }
-
-//    	rx_buffer.usLen = uart_read_bytes(uart_num, rx_buffer.ucElement, UART_RX_BUF_SIZE, 1 / portTICK_PERIOD_MS);
-//    	rx_buffer.dev_channel = DEV_UART;
-//    	if(rx_buffer.usLen > 0)
-//    	{
-//    		xQueueSend(*xuart_rx_queue, ( void * ) &rx_buffer, portMAX_DELAY );
-//    	}
-    }
-}
-*/
 
 static void kline_task(void *arg)
 {
+	const static int KLINE_RX_BUFFER_SIZE = KWP_COMMAND_LENGHT + DEV_BUFFER_LENGTH;
+	char* ws_data = malloc(KLINE_RX_BUFFER_SIZE); // no need to clear since task runs forever
 	xdev_buffer io_buffer;
 	uart_event_t event;
-	char ws_data[KWP_COMMAND_LENGHT];
 
-	const uart_port_t uart_num = UART_NUM_1;
+	static const uart_port_t uart_num = UART_NUM_1;
+	size_t buffered_len = 0;
 	int kline_baud = 0;
-	bool kline_wait_mode = false;
+	bool wait_mode = false;
 
 	while (true) {
 		if (kline_baud != 0 && esp_timer_get_time() - kline_request_time > 10*1000*1000) {
 			kline_request_baud = 0; // no k-line/com activity for 10s
 		}
 		if (kline_baud != kline_request_baud) {
-			kline_baud = kline_request_baud;
-
-			close_uart_usb(uart_num);
-
-			if (kline_baud != 0) {
-				setup_uart_usb(uart_num, &kline_uart_config);
+			if (kline_baud != 0 && kline_request_baud != 0) { // simply change baud
+				uart_wait_tx_done(uart_num, pdMS_TO_TICKS(UART_SWITCH_WAIT_TIME_MS / 2)); // Ждём окончания текущей отправки
+				uart_set_baudrate(uart_num, kline_request_baud); // Меняем скорость на лету (остальные параметры не изменяются)
+				uart_flush_input(uart_num);                      // Очищаем старый мусор в RX-буфере
+			} else {
+				if (kline_baud != 0) {
+					close_uart_usb(uart_num);
+				}
+				if (kline_request_baud != 0) {
+					setup_uart_usb(uart_num, &kline_uart_config);
+				}
 			}
+			kline_baud = kline_request_baud;
 		}
 		if (kline_baud == 0) {
-			vTaskDelay(pdMS_TO_TICKS(10));
+			vTaskDelay(pdMS_TO_TICKS(UART_SWITCH_WAIT_TIME_MS / 3));
 			continue;
 		}
 
-		if (xQueueReceive(*kline_tx_queue, &io_buffer, pdMS_TO_TICKS(1))) {
+		if (xQueueReceive(*kline_tx_queue, &io_buffer, pdMS_TO_TICKS(wait_mode ? 0 : 1)) == pdTRUE) {
 			int offset = 0;
 			while (true) {
 				memcpy(ws_data + offset, io_buffer.ucElement, io_buffer.usLen);
 				offset += io_buffer.usLen;
 
-				if (xQueuePeek(*kline_tx_queue, &io_buffer, pdMS_TO_TICKS(1))
-						&& offset + io_buffer.usLen < sizeof(ws_data)) {
-					if (xQueueReceive(*kline_tx_queue, &io_buffer, 0) != pdTRUE) {
-						break;
-					}
+				if (offset + sizeof(io_buffer.ucElement) <= KLINE_RX_BUFFER_SIZE
+					&& xQueueReceive(*kline_tx_queue, &io_buffer, pdMS_TO_TICKS(0)) == pdTRUE
+					) {
+					continue;
 				}
-				else {
-					break;
-				}
+				break;
 			}
 
 			int to_write = offset;
@@ -320,71 +299,74 @@ static void kline_task(void *arg)
 				to_write -= written;
 			}
 
-			kline_wait_mode = true;
+			wait_mode = true;
 		}
 
-		while (xQueueReceive(uart1_queue, &event, pdMS_TO_TICKS(kline_wait_mode ? 5 : 2))) {
-			if (event.type == UART_DATA && event.size > 0) { // got new data
-				int offset = 0;
-				io_buffer.dev_channel = DEV_UART;
+		while (xQueueReceive(uart1_queue, &event, pdMS_TO_TICKS(wait_mode ? 2 : 1)) == pdTRUE) {
+			if (event.type == UART_DATA) {
+				// Вычитываем всё, что успело накопиться в кольцевом буфере драйвера
+				uart_get_buffered_data_len(uart_num, &buffered_len);
 
-				while (offset < event.size) {
-					io_buffer.usLen = MIN(event.size - offset, sizeof(io_buffer.ucElement));
+				io_buffer.dev_channel = DEV_UART;
+				while (buffered_len > 0) {
+					io_buffer.usLen = MIN(buffered_len, sizeof(io_buffer.ucElement));
 					io_buffer.usLen = uart_read_bytes(uart_num, io_buffer.ucElement, io_buffer.usLen, 0);
-					if (io_buffer.usLen <= 0) {
-						break;
+					if (io_buffer.usLen > 0) {
+						xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
 					}
 
-					xQueueSend(*kline_rx_queue, &io_buffer, pdMS_TO_TICKS(10));
-					offset += io_buffer.usLen;
+					uart_get_buffered_data_len(uart_num, &buffered_len);
 				}
 
-				kline_wait_mode = false;
+				wait_mode = false;
 				//break;
+			} else if (event.type == UART_FIFO_OVF || event.type == UART_BUFFER_FULL) {
+				// Сброс при переполнении, чтобы приём не завис
+				uart_flush_input(uart_num);
+				xQueueReset(uart1_queue);
 			}
 		}
 	}
 }
 
-
 // API
 void wc_uart_init(QueueHandle_t *xTXp_Queue, QueueHandle_t *xRXp_Queue, QueueHandle_t *kLineTX_Queue, QueueHandle_t *kLineRX_Queue, const int gps_power_gpio)
 {
-    xuart_tx_queue = xTXp_Queue;
+	xuart_tx_queue = xTXp_Queue;
 	xuart_rx_queue = xRXp_Queue;
-    kline_tx_queue = kLineTX_Queue;
-    kline_rx_queue = kLineRX_Queue;
-    gps_rx_queue = xQueueCreate(10, sizeof( xdev_buffer) ); // GPS RX queue
+	kline_tx_queue = kLineTX_Queue;
+	kline_rx_queue = kLineRX_Queue;
+	gps_rx_queue = xQueueCreate(10, sizeof( xdev_buffer) ); // GPS RX queue
 
-    gps_serial_init(xuart_tx_queue, &gps_rx_queue, gps_power_gpio);
+	gps_serial_init(xuart_tx_queue, &gps_rx_queue, gps_power_gpio);
 
-    usb_uart_config.baud_rate = settings_get_int(CFG_UART_BAUD);
+	usb_uart_config.baud_rate = settings_get_int(CFG_UART_BAUD);
 
-    setup_uart_usb(UART_NUM_0, &usb_uart_config);
+	setup_uart_usb(UART_NUM_0, &usb_uart_config);
 
-    // Note: looks like one task is faster then two separate tasks
-    //
-    //xTaskCreate(uart_tx_task, "uart_tx_task", 1024*2, NULL, 5, NULL);
-    xTaskCreate(uart_rx_task, "uart_rx_task", 1024*2, NULL, 5, NULL);
-
-    xTaskCreate(kline_task, "kline_task", 1024*2, NULL, 5, NULL);
+	xTaskCreate(uart_rx_task, "uart_rx_task", 1024*2, NULL, 5, NULL);
+	xTaskCreate(uart_tx_task, "uart_tx_task", 1024*2, NULL, 5, NULL);
 }
 
 // API
 bool wc_kline_set_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits)
 {
-    kline_uart_config.baud_rate = baudRate;
-    kline_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
-    kline_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
-    kline_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
+	kline_uart_config.baud_rate = baudRate;
+	kline_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
+	kline_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
+	kline_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
 
-    wc_kline_update(true);
-    kline_request_baud = baudRate;
+	if (kline_task_handle == NULL) {
+		xTaskCreate(kline_task, "kline_task", 1024*2, NULL, 5, &kline_task_handle);
+	}
 
-    // 'kline_task' should have a chance to process
-    vTaskDelay(pdMS_TO_TICKS(RX_QUEUE_WAIT_TIME_MS));
+	wc_kline_update(true);
+	kline_request_baud = baudRate;
 
-    return true;
+	// 'kline_task' should have a chance to process
+	vTaskDelay(pdMS_TO_TICKS(UART_SWITCH_WAIT_TIME_MS));
+
+	return true;
 }
 
 // API
@@ -396,32 +378,31 @@ void wc_kline_update(bool isOnNotOff)
 // API
 bool wc_gps_set_baudrate(const int baudRate, const int parity, const int dataBits, const int stopBits)
 {
-    gps_uart_config.baud_rate = baudRate;
-    gps_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
-    gps_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
-    gps_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
+	gps_uart_config.baud_rate = baudRate;
+	gps_uart_config.parity = (parity == 0 ? UART_PARITY_DISABLE : (parity == 1 ? UART_PARITY_ODD : UART_PARITY_EVEN));
+	gps_uart_config.data_bits = (dataBits == 7 ? UART_DATA_7_BITS : UART_DATA_8_BITS);
+	gps_uart_config.stop_bits = (stopBits == 0 ? UART_STOP_BITS_1 : UART_STOP_BITS_2);
 
-    wc_gps_update(true);
-    request_uart_baud = baudRate;
+	wc_gps_update(true);
 
-    // 'rx_task' should have a chance to process
-    vTaskDelay(pdMS_TO_TICKS(RX_QUEUE_WAIT_TIME_MS));
+	// 'rx_task' should have a chance to process
+	vTaskDelay(pdMS_TO_TICKS(UART_SWITCH_WAIT_TIME_MS));
 
-    return true;
+	return true;
 }
 
 // API
 void wc_gps_update(bool isOnNotOff)
 {
-    if (isOnNotOff) {
-        uart_mode_time = esp_timer_get_time();
-        request_uart_mode = UART_GPS;
-    } else {
-        uart_mode_time = 0;
-    }
+	if (isOnNotOff) {
+		uart_mode_time = esp_timer_get_time();
+		request_uart_mode = UART_GPS;
+	} else {
+		uart_mode_time = 0;
+	}
 }
 
 bool wc_gps_active()
 {
-    return request_uart_mode == UART_GPS;
+	return request_uart_mode == UART_GPS;
 }

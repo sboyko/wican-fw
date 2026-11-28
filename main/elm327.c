@@ -914,7 +914,7 @@ static TickType_t elapsedTimeMs(int64_t txtime)
 int elm327_rx_queue_size(QueueHandle_t *rx_queue)
 {
 	if (elm327_config.uds_rps_skip_size == 0) {
-		return -1;
+		return -2;
 	}
 
 	const int rx_size = uxQueueMessagesWaiting(*rx_queue);
@@ -1655,8 +1655,8 @@ static void elm327_gps_request(const char *cmd, const size_t cmd_len, QueueHandl
 	if (strncmp(cmd, "off", 3) == 0) {
 		gps_set_enabled(false, false); // pause 'nmea_rx_task'
 		vTaskDelay(pdMS_TO_TICKS(20));
-		
-		wc_gps_update(false); // switch to USB (if not K-Line of course)
+
+		wc_gps_update(false); // switch to USB
 		return;
 	}
 

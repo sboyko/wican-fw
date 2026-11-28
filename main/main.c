@@ -454,7 +454,7 @@ $PMTK314,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\
 			|| txQueue == &xmsg_uart_tx_queue // protects against simulteneous use of USB and GPS
 			) {
 			gps_set_enabled(false, false); // pause 'nmea_rx_task'
-			wc_gps_update(false); // switch to USB (if not K-Line of course)
+			wc_gps_update(false); // switch to USB
 			continue;
 		}
 
